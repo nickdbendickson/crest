@@ -2,33 +2,34 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { volumeCheck, VOLUME_RATIO_BAND } from "./inundation.ts";
-import { bandDepthAcc, deepCellsNote, deepCellsOf, depthCapFt, DEPTH_CAP_MARGIN_FT, type DemGrid, polygonizeDepth } from "./outline.ts";
+import { bandDepthAcc, deepCellsNote, deepCellsOf, depthCapFt, type DemGrid, polygonizeDepth } from "./outline.ts";
 import { featureDepth } from "./validation.ts";
 
 describe("depth cap (QA 4-dam, 2026-11-03: band maxima of 215 ft on 27.5 ft DWR-2801)", () => {
-  it("caps at the dam height + margin, and not at all without a height", () => {
-    assert.equal(depthCapFt(27.5), 27.5 + DEPTH_CAP_MARGIN_FT);
+  it("caps at the dam height with no margin, and not at all without a height", () => {
+    assert.equal(depthCapFt(27.5), 27.5);
+    assert.equal(depthCapFt(7), 7);
     assert.equal(depthCapFt(0), Infinity);
     assert.equal(depthCapFt(undefined), Infinity);
   });
 
   it("keeps a band's min/max/mean inside its own range after the mode pass", () => {
-    const a = bandDepthAcc(3, 37.5); // 2–5 ft
+    const a = bandDepthAcc(3, 27.5); // 2–5 ft
     for (const d of [0.1, 3, 142.8]) a.add(d);
     const r = a.done();
     assert.equal(r.dMin, 2);
     assert.equal(r.dMax, 5);
     assert.ok(r.dMean >= 2 && r.dMean <= 5);
-    const top = bandDepthAcc(5, 37.5); // 10 ft and deeper: up to the cap
+    const top = bandDepthAcc(5, 27.5); // 10 ft and deeper: up to the cap
     top.add(215);
-    assert.equal(top.done().dMax, 37.5);
+    assert.equal(top.done().dMax, 27.5);
   });
 
   it("counts and flags cells deeper than the cap", () => {
-    const d = deepCellsOf(Float32Array.from([1, 40, 215, 0]), 37.5);
-    assert.deepEqual(d, { capFt: 37.5, cells: 2, rawMaxFt: 215 });
+    const d = deepCellsOf(Float32Array.from([1, 27.5, 40, 215, 0]), 27.5);
+    assert.deepEqual(d, { capFt: 27.5, cells: 2, rawMaxFt: 215 });
     assert.equal(deepCellsOf(Float32Array.from([1, 40]), Infinity), undefined);
-    assert.match(deepCellsNote({ deepCells: d })!, /2 cells .* deepest 215 ft/);
+    assert.match(deepCellsNote({ deepCells: d })!, /2 cells .*dam height \(27\.5 ft; deepest 215 ft\)/);
     assert.equal(deepCellsNote({}), null);
   });
 
