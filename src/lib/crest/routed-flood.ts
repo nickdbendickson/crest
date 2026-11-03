@@ -18,6 +18,7 @@
 
 import { ACFT, CFS, FT } from "./breach.ts";
 import { fillFlood } from "./fill.ts";
+import { volumeAwareFill } from "./volume-stage.ts";
 import { buildOutline } from "./outline.ts";
 import { type RoutedSection, routeMuskingumCunge, sectionTable } from "./routing.ts";
 import { type Centerline, cutSections } from "./sections.ts";
@@ -36,6 +37,17 @@ export type RoutedFloodOptions = {
   minDepthM?: number;
   /** Cap the fill at the released breach volume instead of only flagging the over-spread. Default false. */
   volumeLimit?: boolean;
+  /**
+   * Volume-aware stage (Lumo, 2026-11-03): lower each section's water surface below the Manning peak until its fill
+   * holds no more than the routed wave's storage there (MC reach storage at the peak). Default false (evaluation).
+   */
+  volumeAware?: boolean;
+  /** Multiplier on the volume-aware storage budget. Default 1. */
+  volumeBudgetFactor?: number;
+  /** How the volume-aware fill applies the budget: lower the stage ("stage") or stop the spread ("spread"). */
+  volumeMode?: "stage" | "spread";
+  /** Station cap margin (m): cap each cell's surface at the routed WSE of its nearest channel station + this. Off by default. */
+  stationCapM?: number;
   /** Floor on the lateral decay slope (m/m); higher stops the sideways spread sooner. Default 0.0005. */
   slopeFloor?: number;
   /**
@@ -77,6 +89,10 @@ export type RoutedFloodResult = {
     volumeFlag: boolean;
     reachedEdge: boolean;
     routedPeakFellBy: number;
+    /** Sections whose stage the volume-aware selection lowered below the Manning peak (0 when it is off). */
+    loweredSections: number;
+    /** Water volume the fill lays down (ac-ft). */
+    fillAcFt: number;
   };
   notes: string[];
 };
@@ -116,13 +132,22 @@ export async function buildRoutedFlood(
   };
   const routed = routeMuskingumCunge(inflow, tables, { maxHours: opts.maxHours ?? 72 });
 
-  const fill = fillFlood(g, centerline, routed.sections, {
+  const fillOpts = {
+    stationCapM: opts.stationCapM,
     minDepthM: opts.minDepthM ?? 0.03,
     availableVolumeM3: result.breach.volumeAcFt * ACFT,
     volumeLimit: opts.volumeLimit ?? false,
     slopeFloor: opts.slopeFloor,
     maxFloodplainDepthM: opts.floodplainDepthMarginM ?? FLOODPLAIN_DEPTH_MARGIN_M,
-  });
+  };
+  let loweredSections = 0;
+  let fill;
+  if (opts.volumeAware) {
+    const va = volumeAwareFill(g, centerline, routed.sections, fillOpts, { budgetFactor: opts.volumeBudgetFactor, mode: opts.volumeMode });
+    fill = va.fill;
+    routed.sections = va.sections;
+    loweredSections = va.lowered;
+  } else fill = fillFlood(g, centerline, routed.sections, fillOpts);
 
   const N = g.width * g.height;
   const depthFt = new Float32Array(N);
@@ -160,6 +185,8 @@ export async function buildRoutedFlood(
       volumeFlag: fill.volumeFlag,
       reachedEdge: fill.reachedEdge,
       routedPeakFellBy: peakInCfs > 0 ? Math.round((1 - peakOutCfs / peakInCfs) * 100) / 100 : 0,
+      loweredSections,
+      fillAcFt: Math.round(fill.volumeM3 / ACFT),
     },
     notes,
   };

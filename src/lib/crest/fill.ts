@@ -51,6 +51,24 @@ export type FillOptions = {
    * support. Default false (envelope + flag, the method as first agreed).
    */
   volumeLimit?: boolean;
+  /**
+   * Attribute every wet cell to the routed section whose channel seed carried its surface, and return the water
+   * volume laid down per section (FillResult.sectionVolumeM3). Used by the volume-aware stage selection.
+   */
+  trackSections?: boolean;
+  /**
+   * Per-section storage budget (m³, one per routed section; implies trackSections). A cell whose section has already
+   * laid down its budget stays dry and spreads no further, so each stretch of valley holds only the water the routed
+   * wave carries there. The heap pops highest water first, so within a section the deep near-channel water is kept and
+   * the far fringe is what the budget trims.
+   */
+  sectionBudgetM3?: number[];
+  /**
+   * Station cap: no cell's carried surface may exceed the routed WSE at its own nearest channel station (plus this
+   * margin, m). Without it a near-dam surface spreads laterally off the channel and then runs down the valley at the
+   * tiny lateral decay, holding an upstream stage over ground the routed water surface is far below. Default off.
+   */
+  stationCapM?: number;
 };
 
 export type FillResult = {
@@ -68,6 +86,8 @@ export type FillResult = {
   volumeFlag: boolean;
   /** The flood reached the DEM edge, so it would spread further than the DEM shows. */
   reachedEdge: boolean;
+  /** Water volume (m³) laid down per routed section, when trackSections is set. */
+  sectionVolumeM3?: Float64Array;
 };
 
 /** Binary max-heap of cell indices keyed by `key[k]` (highest first). */
@@ -117,20 +137,17 @@ class MaxHeap {
 }
 
 /** Routed WSE and reach slope at a distance downstream, from the routed sections (clamped to the ends). */
-function stageAt(sections: RoutedSection[], x: number): { wse: number; slope: number } {
-  if (x <= sections[0].x) return { wse: sections[0].wseM, slope: sections[0].slopeStage };
+function stageAt(sections: RoutedSection[], x: number): { wse: number; slope: number; sec: number } {
+  if (x <= sections[0].x) return { wse: sections[0].wseM, slope: sections[0].slopeStage, sec: 0 };
   for (let i = 1; i < sections.length; i++)
     if (sections[i].x >= x) {
       const a = sections[i - 1];
       const b = sections[i];
       const t = b.x > a.x ? (x - a.x) / (b.x - a.x) : 0;
-      return {
-        wse: a.wseM + t * (b.wseM - a.wseM),
-        slope: a.slopeStage + t * (b.slopeStage - a.slopeStage),
-      };
+      return { wse: a.wseM + t * (b.wseM - a.wseM), slope: a.slopeStage + t * (b.slopeStage - a.slopeStage), sec: t < 0.5 ? i - 1 : i };
     }
   const last = sections[sections.length - 1];
-  return { wse: last.wseM, slope: last.slopeStage };
+  return { wse: last.wseM, slope: last.slopeStage, sec: sections.length - 1 };
 }
 
 /**
@@ -178,6 +195,9 @@ export function fillFlood(
   const stageCap = opts.maxFloodplainDepthM ?? Infinity;
   const heap = new MaxHeap(wse, Math.max(1024, Math.ceil(N / 8)));
   const seeded = new Uint8Array(N);
+  const budgetBySec = opts.sectionBudgetM3;
+  const srcSec = opts.trackSections || budgetBySec ? new Int32Array(N).fill(-1) : null;
+  const sectionVolumeM3 = opts.trackSections || budgetBySec ? new Float64Array(sections.length) : undefined;
 
   // Seed every channel cell with its routed WSE (interpolated along the centreline). Sub-sample the centreline so a
   // step longer than the cell still seeds every cell it crosses.
@@ -201,6 +221,7 @@ export function fillFlood(
         wse[k] = st.wse;
         srcSlope[k] = Math.max(slopeFloor, st.slope);
         srcStage[k] = st.wse - g.z[k];
+        if (srcSec) srcSec[k] = st.sec;
         seeded[k] = 1;
         heap.push(k);
       }
@@ -216,6 +237,43 @@ export function fillFlood(
   const DI = [1, -1, 0, 0, 1, 1, -1, -1];
   const DJ = [0, 0, 1, -1, 1, -1, 1, -1];
 
+  // Station cap: a multi-source BFS from the seeded channel cells gives every cell the station (x down the channel) of
+  // its nearest seed, and with it the routed WSE there.
+  let capWse: Float64Array | null = null;
+  if (opts.stationCapM != null) {
+    const seedX = new Float64Array(N).fill(NaN);
+    for (let p = 0; p + 1 < pts.length; p++) {
+      const a = pts[p];
+      const b = pts[p + 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.e - a.e, b.n - a.n) / (cellM * 0.5)));
+      for (let s2 = 0; s2 <= steps; s2++) {
+        const f = s2 / steps;
+        const k = cellAt(a.e + f * (b.e - a.e), a.n + f * (b.n - a.n));
+        if (k >= 0 && Number.isNaN(seedX[k])) seedX[k] = a.x + f * (b.x - a.x);
+      }
+    }
+    const q = new Int32Array(N);
+    let qh = 0;
+    let qt = 0;
+    for (let k = 0; k < N; k++) if (!Number.isNaN(seedX[k])) q[qt++] = k;
+    while (qh < qt) {
+      const c = q[qh++];
+      const ci = c % W;
+      const cj = (c - ci) / W;
+      for (let t = 0; t < 4; t++) {
+        const ii = ci + (t === 0 ? 1 : t === 1 ? -1 : 0);
+        const jj = cj + (t === 2 ? 1 : t === 3 ? -1 : 0);
+        if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue;
+        const m = jj * W + ii;
+        if (!Number.isNaN(seedX[m])) continue;
+        seedX[m] = seedX[c];
+        q[qt++] = m;
+      }
+    }
+    capWse = new Float64Array(N);
+    for (let k = 0; k < N; k++) capWse[k] = Number.isNaN(seedX[k]) ? Infinity : stageAt(sections, seedX[k]).wse + opts.stationCapM;
+  }
+
   while (heap.size > 0) {
     const c = heap.pop();
     if (done[c]) continue;
@@ -223,11 +281,16 @@ export function fillFlood(
     const surf = wse[c];
     const cap = Number.isFinite(stageCap) ? Math.max(0, srcStage[c]) + stageCap : Infinity;
     const d = Math.min(surf - g.z[c], cap);
+    if (budgetBySec && srcSec && sectionVolumeM3 && srcSec[c] >= 0 && d >= minDepth) {
+      const sc = srcSec[c];
+      if (sectionVolumeM3[sc] + d * cellM2 > budgetBySec[sc]) continue; // this stretch's water is used up
+    }
     if (d >= minDepth) {
       depthM[c] = d;
       outWse[c] = surf;
       wetCells++;
       volumeM3 += d * cellM2;
+      if (srcSec && sectionVolumeM3 && srcSec[c] >= 0) sectionVolumeM3[srcSec[c]] += d * cellM2;
       if (wetCells > maxWet) break;
       // Volume-limited fill: once the laid-down volume reaches what the breach supplies, stop. The heap pops highest
       // water first, so every cell still queued carries a lower surface than this one — stopping trims the shallow,
@@ -245,12 +308,14 @@ export function fillFlood(
       if (done[m] || !valid(m)) continue;
       const stepLen = DI[t] !== 0 && DJ[t] !== 0 ? cellM * Math.SQRT2 : cellM;
       // Carried surface falls laterally at the reach slope; the down-channel drop is already in the routed stages.
-      const carried = surf - srcSlope[c] * stepLen;
+      let carried = surf - srcSlope[c] * stepLen;
+      if (capWse && carried > capWse[m]) carried = capWse[m];
       if (carried - g.z[m] < minDepth) continue; // not deep enough here to spread into
       if (carried > wse[m]) {
         wse[m] = carried;
         srcSlope[m] = srcSlope[c];
         srcStage[m] = srcStage[c];
+        if (srcSec) srcSec[m] = srcSec[c];
         heap.push(m);
       }
     }
@@ -268,5 +333,6 @@ export function fillFlood(
     volumeM3,
     volumeFlag,
     reachedEdge,
+    sectionVolumeM3,
   };
 }
