@@ -90,8 +90,7 @@ describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => 
     if (!SP.ok || !RF.ok) return;
     assert.ok(SP.notes.some((n) => n.startsWith("Volume spread:")));
     assert.ok(SP.stats.volumeRatio > 0);
-    // Both are capped at the release now; the uncapped envelopes keep the comparison.
-    assert.ok(SP.stats.uncappedAcFt < RF.stats.uncappedAcFt, `${SP.stats.uncappedAcFt} vs ${RF.stats.uncappedAcFt}`);
+    assert.ok(SP.stats.volumeRatio < RF.stats.volumeRatio, `${SP.stats.volumeRatio} vs ${RF.stats.volumeRatio}`);
   });
 
   it("leaves the stage method unchanged by default", () => {
@@ -102,26 +101,23 @@ describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => 
   });
 });
 
-describe("buildRoutedFlood conserves the breach volume (Docs & QA N1)", () => {
-  it("caps the stage fill and the spread at the released volume by default", async () => {
+describe("buildRoutedFlood: the stage fill's volume limit (Docs & QA N1)", () => {
+  it("is off by default: neither method is capped, and the uncapped volume is the volume laid down", () => {
     for (const r of [RF, SP]) {
       assert.ok(r.ok);
       if (!r.ok) continue;
-      assert.ok(r.stats.fillAcFt <= r.stats.releasedAcFt, `${r.stats.fillAcFt} > ${r.stats.releasedAcFt}`);
-      assert.ok(r.stats.volumeRatio <= 1);
-      assert.equal(r.stats.volumeFlag, false);
-      assert.equal(r.stats.volumeCapped, true);
-      assert.ok(r.stats.uncappedAcFt > r.stats.fillAcFt);
-      assert.ok(r.notes.some((n) => n.startsWith("Volume cap:")));
+      assert.equal(r.stats.volumeCapped, false);
+      assert.equal(r.stats.uncappedAcFt, r.stats.fillAcFt);
     }
   });
-  it("volumeLimit: false restores the uncapped envelope, which is larger in area and volume", async () => {
-    const OPEN = await buildRoutedFlood(ND, RESULT, DEM, { volumeLimit: false });
-    assert.ok(OPEN.ok && RF.ok);
-    if (!OPEN.ok || !RF.ok) return;
-    assert.equal(OPEN.stats.volumeCapped, false);
-    assert.ok(OPEN.stats.fillAcFt > OPEN.stats.releasedAcFt);
-    assert.ok(OPEN.stats.floodedAc > RF.stats.floodedAc);
-    assert.equal(OPEN.stats.fillAcFt, RF.stats.uncappedAcFt);
+  it("volumeLimit: true stops the stage fill at the release and keeps the uncapped volume for provenance", async () => {
+    const CAP = await buildRoutedFlood(ND, RESULT, DEM, { volumeLimit: true });
+    assert.ok(CAP.ok && RF.ok);
+    if (!CAP.ok || !RF.ok) return;
+    assert.equal(CAP.stats.volumeCapped, true);
+    assert.ok(CAP.stats.fillAcFt <= CAP.stats.releasedAcFt, `${CAP.stats.fillAcFt} > ${CAP.stats.releasedAcFt}`);
+    assert.equal(CAP.stats.uncappedAcFt, RF.stats.fillAcFt);
+    assert.ok(CAP.stats.floodedAc < RF.stats.floodedAc);
+    assert.ok(CAP.notes.some((n) => n.startsWith("Volume cap:")));
   });
 });

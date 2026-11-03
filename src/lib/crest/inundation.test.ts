@@ -7,7 +7,7 @@ import { gunzipSync } from "node:zlib";
 import { analyze } from "./engine.ts";
 import { buildInundation, GATE_VOLUME_ACFT, chooseInundationLayer } from "./inundation.ts";
 import type { DemGrid } from "./outline.ts";
-import { outlineInputs, polygonizeDepth } from "./outline.ts";
+import { outlineInputs, outlineState, polygonizeDepth } from "./outline.ts";
 import { SAMPLE_DAMS } from "./samples.ts";
 import type { Analysis } from "./types.ts";
 
@@ -98,11 +98,29 @@ describe("buildInundation on ND00199 (30 m fixture, 1,609 ac-ft → routed)", ()
     assert.ok(r.cache.routed!.peakInCfs > 0);
     assert.ok(r.cache.routed!.peakOutCfs <= r.cache.routed!.peakInCfs + 1);
     assert.equal(typeof r.cache.routed!.volumeFlag, "boolean");
+    // The desk's routed layer is the volume spread, and the saved summary says so.
+    assert.equal(r.routed?.ok && r.routed.method, "spread");
+    assert.equal(r.cache.routed!.method, "spread");
+    assert.equal(outlineState({ ...ND, outline: r.cache }, RESULT, true).state, "ready");
   });
 
-  it("the volume cap shrinks the saved outline PLSS and 911 are drawn from: the saved outline is smaller with the volume cap than without", async () => {
-    const capped = await buildInundation(ND, RESULT, DEM);
-    const open = await buildInundation(ND, RESULT, DEM, { volumeLimit: false });
+  it("still builds the stage fill when asked, and reads a saved stage-fill layer as stale", async () => {
+    const r = await buildInundation(ND, RESULT, DEM, { method: "stage" });
+    assert.ok(r.ok && r.layer === "routed");
+    if (!r.ok) return;
+    assert.equal(r.cache.routed!.method, "stage");
+    const { method: _drop, ...legacy } = r.cache.routed!;
+    void _drop;
+    for (const routed of [r.cache.routed!, legacy]) {
+      const st = outlineState({ ...ND, outline: { ...r.cache, routed } }, RESULT, true);
+      assert.equal(st.state, "build");
+      assert.match(st.message ?? "", /old stage fill/);
+    }
+  });
+
+  it("the stage fill's volume cap shrinks the saved outline the PLSS and 911 lists are drawn from", async () => {
+    const capped = await buildInundation(ND, RESULT, DEM, { method: "stage", volumeLimit: true });
+    const open = await buildInundation(ND, RESULT, DEM, { method: "stage" });
     assert.ok(capped.ok && open.ok);
     if (!capped.ok || !open.ok) return;
     assert.ok(capped.cache.stats.outlineAc < open.cache.stats.outlineAc, `${capped.cache.stats.outlineAc} vs ${open.cache.stats.outlineAc}`);
