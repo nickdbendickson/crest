@@ -48,7 +48,7 @@ export type FillOptions = {
   /**
    * Cap the fill at availableVolumeM3 instead of only flagging it. The heap spreads highest-water-first, so stopping
    * at the cap keeps the deepest, most connected water and trims the shallow far-spread fringe the volume can't
-   * support. Default false here; the routed flood (routed-flood.ts) turns it on.
+   * support. Default false (envelope + flag); routed-flood.ts passes its own volumeLimit through.
    */
   volumeLimit?: boolean;
 };

@@ -36,9 +36,10 @@ export type RoutedFloodOptions = {
   /** A cell is wet at this depth (m). Default 0.03 (~0.1 ft). */
   minDepthM?: number;
   /**
-   * Conserve volume: the layer never lays down more water than the breach releases (Docs & QA N1, approved by Nick
-   * 2026-11-03). The stage fill stops at the released volume (keeping the highest water first); the spread scales every
-   * stretch's slice down until the slices sum to the release. Default true; false restores the uncapped envelope + flag.
+   * Stage fill only: stop the fill at the released breach volume instead of only flagging the over-spread (keeping the
+   * highest water first). Default false. The spread is not capped: a moving flood's max-depth envelope legitimately
+   * holds several times the release (LISFLOOD 2.7–4.8× on the baseline dams), and capping it at 1× drops it below the
+   * outline on DWR-2801 and DWR-4031 (crest-inundation/pr-audit-38-40).
    */
   volumeLimit?: boolean;
   /** Floor on the lateral decay slope (m/m); higher stops the sideways spread sooner. Default 0.0005. */
@@ -57,6 +58,11 @@ export type RoutedFloodOptions = {
   method?: "stage" | "spread";
   /** Spread only: follow the breach's own flow path rather than the outline's drainage trace (default false). */
   breachPath?: boolean;
+  /**
+   * Spread only: closed basins on the channel hold water the wave must fill before it passes, and one that holds all of
+   * it ends the flood (default true). See spread.ts step 3c.
+   */
+  basins?: boolean;
   /** Spread only: bumps lower than this (m) don't end a section's hydraulic table. Default SPREAD_RIDGE_TOL_M. */
   ridgeTolM?: number;
   /** Called every so many cells during the DEM trace so a long build can let the page breathe. */
@@ -112,9 +118,9 @@ export type RoutedFloodResult = {
     releasedAcFt: number;
     /** fillAcFt / releasedAcFt: how many times the released volume the max-surface envelope lays down (provenance). */
     volumeRatio: number;
-    /** The volume cap trimmed the layer: the uncapped envelope would have laid down uncappedAcFt. */
+    /** The stage fill's volume limit trimmed the layer (volumeLimit: true); the uncapped fill lays down uncappedAcFt. */
     volumeCapped: boolean;
-    /** Water the uncapped envelope lays down (ac-ft); equals fillAcFt when the cap did not bite. */
+    /** Water the uncapped layer lays down (ac-ft); equals fillAcFt when nothing was capped. */
     uncappedAcFt: number;
   };
   notes: string[];
@@ -188,25 +194,14 @@ export async function buildRoutedFlood(
   let reachedEdge: boolean;
   let velocityFps: Float32Array | undefined;
   let arrivalHr: Float32Array | undefined;
-  const volumeLimit = opts.volumeLimit ?? true;
-  const releasedM3 = releasedAcFt * ACFT;
   let volumeCapped = false;
   let uncappedM3 = 0;
   if (method === "spread") {
-    const pour = (sliceScale: number) =>
-      spreadVolume(g, centerline, routed.sections, { minDepthM: opts.minDepthM ?? 0.03, releasedM3, sliceScale });
-    let sp = pour(1);
-    uncappedM3 = sp.volumeM3;
-    // Volume cap: scale every slice so they sum to no more than the release. Scaling a slice also changes the water
-    // left in depressions (so the later slices), hence a few passes; each pass only shrinks the slices.
-    if (volumeLimit && releasedM3 > 0 && sp.slicesM3 > releasedM3) {
-      let scale = 1;
-      for (let it = 0; it < 8 && sp.slicesM3 > releasedM3; it++) {
-        scale *= (releasedM3 / sp.slicesM3) * (1 - 1e-6);
-        sp = pour(scale);
-      }
-      volumeCapped = true;
-    }
+    const sp = spreadVolume(g, centerline, routed.sections, {
+      minDepthM: opts.minDepthM ?? 0.03,
+      releasedM3: releasedAcFt * ACFT,
+      basins: opts.basins ?? true,
+    });
     for (let k = 0; k < N; k++) depthFt[k] = sp.depthM[k] > 0 ? sp.depthM[k] / FT : 0;
     velocityFps = new Float32Array(N).fill(NaN);
     arrivalHr = new Float32Array(N).fill(NaN);
@@ -218,14 +213,11 @@ export async function buildRoutedFlood(
     wseM = sp.wseM;
     floodedAc = sp.floodedAc;
     volumeM3 = sp.volumeM3;
+    uncappedM3 = sp.volumeM3;
     reachedEdge = sp.reachedEdge;
     // The spread is volume-conserving by construction; the flag here is the envelope outside the band a real
     // max-depth envelope holds (LISFLOOD ~3–5× the release on the baseline dams), checked loosely at 10×.
-    volumeFlag = !volumeCapped && sp.volumeRatio != null && sp.volumeRatio > SPREAD_RATIO_FLAG;
-    if (volumeCapped)
-      notes.push(
-        `Volume cap: the slices were scaled down so the layer holds no more than the breach releases (${(sp.volumeM3 / ACFT).toFixed(0)} ac-ft laid down for ${releasedAcFt.toFixed(0)} ac-ft released; uncapped, the envelope would lay down ${(uncappedM3 / ACFT).toFixed(0)} ac-ft).`,
-      );
+    volumeFlag = sp.volumeRatio != null && sp.volumeRatio > SPREAD_RATIO_FLAG;
     notes.push(
       `Volume spread: ${sp.stretches} stretches poured at their own peak storage, ${(sp.volumeM3 / ACFT).toFixed(0)} ac-ft laid down for ${releasedAcFt.toFixed(0)} ac-ft released (${sp.volumeRatio == null ? "—" : sp.volumeRatio.toFixed(1) + "×"}, the max-depth envelope of a moving flood).`,
     );
@@ -233,6 +225,12 @@ export async function buildRoutedFlood(
       notes.push(
         `${(sp.retainedM3 / ACFT).toFixed(0)} ac-ft is left behind in depressions on the way down; ${sp.travellingM3 > 0 ? `${(sp.travellingM3 / ACFT).toFixed(0)} ac-ft is still travelling at the end of the traced reach` : "the flood is spent before the end of the traced reach"}.`,
       );
+    if (sp.stoppedIn)
+      notes.push(
+        `The flood ends ${(sp.stoppedIn.atM / 1000).toFixed(1)} km down in a closed basin that holds ${(sp.stoppedIn.capacityM3 / ACFT).toFixed(0)} ac-ft below its spill level (${(sp.stoppedIn.spillM / FT).toFixed(0)} ft), more than the ${(sp.stoppedIn.heldM3 / ACFT).toFixed(0)} ac-ft that reaches it: it stands there as a ${sp.stoppedIn.areaAc.toFixed(0)} ac pond. If the basin is closed by a road or rail fill, check for a culvert or bridge the DEM doesn't show.`,
+      );
+    if (sp.basinsFilled)
+      notes.push(`${sp.basinsFilled} closed basin${sp.basinsFilled === 1 ? "" : "s"} on the channel filled to the spill level before the wave passed.`);
     if (sp.exhaustedStretches)
       notes.push(`${sp.exhaustedStretches} stretch${sp.exhaustedStretches === 1 ? "" : "es"} ran out of ground before the slice was poured (the DEM is too small there).`);
     notes.push(
@@ -241,8 +239,8 @@ export async function buildRoutedFlood(
   } else {
     const fill = fillFlood(g, centerline, routed.sections, {
       minDepthM: opts.minDepthM ?? 0.03,
-      availableVolumeM3: releasedM3,
-      volumeLimit,
+      availableVolumeM3: releasedAcFt * ACFT,
+      volumeLimit: opts.volumeLimit ?? false,
       slopeFloor: opts.slopeFloor,
       maxFloodplainDepthM: opts.floodplainDepthMarginM ?? FLOODPLAIN_DEPTH_MARGIN_M,
     });
@@ -255,10 +253,10 @@ export async function buildRoutedFlood(
     volumeCapped = fill.capped;
     uncappedM3 = fill.volumeM3;
     if (fill.capped) {
-      // What the uncapped envelope would lay down, for the note and the provenance (the cap's effect stays visible).
+      // What the uncapped fill would lay down, for the note and the provenance (the cap's effect stays visible).
       const open = fillFlood(g, centerline, routed.sections, {
         minDepthM: opts.minDepthM ?? 0.03,
-        availableVolumeM3: releasedM3,
+        availableVolumeM3: releasedAcFt * ACFT,
         volumeLimit: false,
         slopeFloor: opts.slopeFloor,
         maxFloodplainDepthM: opts.floodplainDepthMarginM ?? FLOODPLAIN_DEPTH_MARGIN_M,
