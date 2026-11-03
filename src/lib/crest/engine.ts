@@ -46,7 +46,7 @@ export function isLocalElev(ft: number) {
 }
 
 function signed(n: number) {
-  return `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(2)}`;
+  return `${n >= 0 ? "+" : "-"}${Math.abs(n).toFixed(2)}`;
 }
 
 /** Clamp an input to the desk range and say so, instead of clamping silently. */
@@ -109,13 +109,13 @@ function tieValue(
   if (localRecord && offset != null) {
     const navd = stated + offset;
     if (Math.abs(navd - crestNavd) > TIE_BAND) {
-      const crestField = label === "Top of dam";
-      if (!crestField) {
-        return {
-          navd: null,
-          warning: `${label} ${fmtFt(stated)} ft ties to ${fmtFt(navd)} ft, ${fmtFt(Math.abs(navd - crestNavd))} ft from the DEM crest. Left out (100 ft guard).`,
-        };
-      }
+      // tieValue only runs for Streambed / Spillway / Normal pool (never "Top of dam"), so a tie more than the
+      // 100 ft guard from the DEM crest is always left out. The old code gated this on a `label === "Top of dam"`
+      // branch that could never be true, with an implicit fall-through that would have kept such a value unwarned.
+      return {
+        navd: null,
+        warning: `${label} ${fmtFt(stated)} ft ties to ${fmtFt(navd)} ft, ${fmtFt(Math.abs(navd - crestNavd))} ft from the DEM crest. Left out (100 ft guard).`,
+      };
     }
     return { navd, warning: null };
   }
