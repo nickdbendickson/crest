@@ -109,6 +109,10 @@ export type RoutedFloodResult = {
     volumeFlag: boolean;
     reachedEdge: boolean;
     routedPeakFellBy: number;
+    /** Spread only (0 for the stage fill): stretches that ran out of ground, those held at the cap, and the ac-ft withheld. */
+    exhaustedStretches: number;
+    cappedStretches: number;
+    unpouredAcFt: number;
     /** Water volume the fill lays down (ac-ft). */
     fillAcFt: number;
     /** Breach volume released (ac-ft), the denominator of the volume ratio. */
@@ -189,12 +193,20 @@ export async function buildRoutedFlood(
   let reachedEdge: boolean;
   let velocityFps: Float32Array | undefined;
   let arrivalHr: Float32Array | undefined;
+  let exhaustedStretches = 0;
+  let cappedStretches = 0;
+  let unpouredM3 = 0;
   if (method === "spread") {
     const sp = spreadVolume(g, centerline, routed.sections, {
       minDepthM: opts.minDepthM ?? 0.03,
       releasedM3: releasedAcFt * ACFT,
       basins: opts.basins ?? true,
+      // A stretch that runs out of ground is held at the routed stage + 1 ft and never above 2× the dam's height.
+      maxLevelM: Number.isFinite(dam.heightFt) && dam.heightFt > 0 ? 2 * dam.heightFt * FT : undefined,
     });
+    exhaustedStretches = sp.exhaustedStretches;
+    cappedStretches = sp.cappedStretches;
+    unpouredM3 = sp.unpouredM3;
     for (let k = 0; k < N; k++) depthFt[k] = sp.depthM[k] > 0 ? sp.depthM[k] / FT : 0;
     velocityFps = new Float32Array(N).fill(NaN);
     arrivalHr = new Float32Array(N).fill(NaN);
@@ -224,7 +236,12 @@ export async function buildRoutedFlood(
     if (sp.basinsFilled)
       notes.push(`${sp.basinsFilled} closed basin${sp.basinsFilled === 1 ? "" : "s"} on the channel filled to the spill level before the wave passed.`);
     if (sp.exhaustedStretches)
-      notes.push(`${sp.exhaustedStretches} stretch${sp.exhaustedStretches === 1 ? "" : "es"} ran out of ground before the slice was poured (the DEM is too small there).`);
+      notes.push(
+        `${sp.exhaustedStretches} stretch${sp.exhaustedStretches === 1 ? "" : "es"} ran out of ground before the slice was poured (the DEM is too small there)` +
+          (sp.cappedStretches
+            ? `; on ${sp.cappedStretches} the pool is held at the routed stage + 1 ft (never above 2× the dam height) and ${(sp.unpouredM3 / ACFT).toFixed(0)} ac-ft of the slices is not laid down: it would stand beyond the ground shown, not deeper on it.`
+            : "."),
+      );
     notes.push(
       "A level pool reaches only ground below its level: a breach front that surges over a low divide can wet ground this layer leaves dry (a known under-prediction).",
     );
@@ -284,6 +301,9 @@ export async function buildRoutedFlood(
       fillAcFt: Math.round(fillAcFt),
       releasedAcFt: Math.round(releasedAcFt),
       volumeRatio: releasedAcFt > 0 ? Math.round((fillAcFt / releasedAcFt) * 10) / 10 : 0,
+      exhaustedStretches,
+      cappedStretches,
+      unpouredAcFt: Math.round(unpouredM3 / ACFT),
     },
     notes,
   };

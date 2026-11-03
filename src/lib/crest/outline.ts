@@ -146,6 +146,13 @@ export type RoutedSummary = {
   /** How the flood was laid on the terrain; absent on layers built before the volume spread became the default. */
   method?: "stage" | "spread";
   reachedEdge: boolean;
+  /**
+   * Spread only; absent on layers built before the cap: stretches that ran out of ground, those held at the cap, and
+   * the ac-ft of the slices withheld (water that would stand beyond the ground shown).
+   */
+  exhaustedStretches?: number;
+  cappedStretches?: number;
+  unpouredAcFt?: number;
   notes: string[];
 };
 
