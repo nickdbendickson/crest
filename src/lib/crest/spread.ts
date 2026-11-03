@@ -132,6 +132,11 @@ export type SpreadResult = {
   stoppedIn: { atM: number; spillM: number; capacityM3: number; heldM3: number; areaAc: number } | null;
   stretches: number;
   reachedEdge: boolean;
+  /**
+   * How far down the channel the water got (m along the centreline, the downstream end of the last stretch with a wet
+   * channel cell; 0 when none). The reach loop (reach.ts) reads it against the traced channel's end.
+   */
+  wetEndM: number;
 };
 
 /**
@@ -587,6 +592,9 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   let wetCells = 0;
   let volumeM3 = 0;
   let reachedEdge = false;
+  let lastWet = -1;
+  for (const k of channel) if (depthM[k] > 0 && label[k] > lastWet) lastWet = label[k];
+  const wetEndM = lastWet >= 0 ? sections[Math.min(lastWet + 1, nS - 1)].x : 0;
   for (let k = 0; k < N; k++) {
     if (depthM[k] <= 0) continue;
     wetCells++;
@@ -618,6 +626,7 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
     stoppedIn,
     stretches,
     reachedEdge,
+    wetEndM,
   };
 }
 
