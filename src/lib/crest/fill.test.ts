@@ -199,3 +199,22 @@ describe("fillFlood: volume flag and the DEM edge", () => {
     assert.equal(ok.volumeFlag, false);
   });
 });
+
+describe("fillFlood: volume limit conserves the breach volume", () => {
+  const line = straight(400, -400);
+  const sections: RoutedSection[] = [];
+  for (let x = 0; x <= 800; x += 50) sections.push(sec(x, 104, 0.001, 102));
+  const dem = synthDem(120, 10, () => 103);
+
+  it("never lays down more than availableVolumeM3, and says it capped", () => {
+    for (const cap of [1000, 12345, 250000]) {
+      const r = fillFlood(dem, line, sections, { minDepthM: 0.03, availableVolumeM3: cap, volumeLimit: true });
+      assert.ok(r.volumeM3 <= cap, `laid down ${r.volumeM3.toFixed(0)} m³ for a ${cap} m³ cap`);
+      assert.ok(r.volumeM3 > 0);
+      assert.equal(r.capped, true);
+      assert.equal(r.volumeFlag, false);
+    }
+    const open = fillFlood(dem, line, sections, { minDepthM: 0.03, availableVolumeM3: 1e12, volumeLimit: true });
+    assert.equal(open.capped, false, "a cap the envelope never reaches does not bite");
+  });
+});
