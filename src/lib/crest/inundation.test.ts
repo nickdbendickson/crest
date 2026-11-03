@@ -99,4 +99,13 @@ describe("buildInundation on ND00199 (30 m fixture, 1,609 ac-ft → routed)", ()
     assert.ok(r.cache.routed!.peakOutCfs <= r.cache.routed!.peakInCfs + 1);
     assert.equal(typeof r.cache.routed!.volumeFlag, "boolean");
   });
+
+  it("the volume cap shrinks the saved outline PLSS and 911 are drawn from: the saved outline is smaller with the volume cap than without", async () => {
+    const capped = await buildInundation(ND, RESULT, DEM);
+    const open = await buildInundation(ND, RESULT, DEM, { volumeLimit: false });
+    assert.ok(capped.ok && open.ok);
+    if (!capped.ok || !open.ok) return;
+    assert.ok(capped.cache.stats.outlineAc < open.cache.stats.outlineAc, `${capped.cache.stats.outlineAc} vs ${open.cache.stats.outlineAc}`);
+    assert.ok(capped.cache.routed!.fillAcFt <= capped.cache.routed!.releasedAcFt);
+  });
 });

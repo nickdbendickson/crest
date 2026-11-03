@@ -90,7 +90,8 @@ describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => 
     if (!SP.ok || !RF.ok) return;
     assert.ok(SP.notes.some((n) => n.startsWith("Volume spread:")));
     assert.ok(SP.stats.volumeRatio > 0);
-    assert.ok(SP.stats.volumeRatio < RF.stats.volumeRatio, `${SP.stats.volumeRatio} vs ${RF.stats.volumeRatio}`);
+    // Both are capped at the release now; the uncapped envelopes keep the comparison.
+    assert.ok(SP.stats.uncappedAcFt < RF.stats.uncappedAcFt, `${SP.stats.uncappedAcFt} vs ${RF.stats.uncappedAcFt}`);
   });
 
   it("leaves the stage method unchanged by default", () => {
@@ -98,5 +99,29 @@ describe("buildRoutedFlood, method spread (quasi-dynamic volume spread)", () => 
     if (!RF.ok) return;
     assert.equal(RF.method, "stage");
     assert.equal(RF.velocityFps, undefined);
+  });
+});
+
+describe("buildRoutedFlood conserves the breach volume (Docs & QA N1)", () => {
+  it("caps the stage fill and the spread at the released volume by default", async () => {
+    for (const r of [RF, SP]) {
+      assert.ok(r.ok);
+      if (!r.ok) continue;
+      assert.ok(r.stats.fillAcFt <= r.stats.releasedAcFt, `${r.stats.fillAcFt} > ${r.stats.releasedAcFt}`);
+      assert.ok(r.stats.volumeRatio <= 1);
+      assert.equal(r.stats.volumeFlag, false);
+      assert.equal(r.stats.volumeCapped, true);
+      assert.ok(r.stats.uncappedAcFt > r.stats.fillAcFt);
+      assert.ok(r.notes.some((n) => n.startsWith("Volume cap:")));
+    }
+  });
+  it("volumeLimit: false restores the uncapped envelope, which is larger in area and volume", async () => {
+    const OPEN = await buildRoutedFlood(ND, RESULT, DEM, { volumeLimit: false });
+    assert.ok(OPEN.ok && RF.ok);
+    if (!OPEN.ok || !RF.ok) return;
+    assert.equal(OPEN.stats.volumeCapped, false);
+    assert.ok(OPEN.stats.fillAcFt > OPEN.stats.releasedAcFt);
+    assert.ok(OPEN.stats.floodedAc > RF.stats.floodedAc);
+    assert.equal(OPEN.stats.fillAcFt, RF.stats.uncappedAcFt);
   });
 });

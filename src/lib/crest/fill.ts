@@ -48,7 +48,7 @@ export type FillOptions = {
   /**
    * Cap the fill at availableVolumeM3 instead of only flagging it. The heap spreads highest-water-first, so stopping
    * at the cap keeps the deepest, most connected water and trims the shallow far-spread fringe the volume can't
-   * support. Default false (envelope + flag, the method as first agreed).
+   * support. Default false here; the routed flood (routed-flood.ts) turns it on.
    */
   volumeLimit?: boolean;
 };
@@ -66,6 +66,8 @@ export type FillResult = {
   volumeM3: number;
   /** True when volumeM3 exceeds the supplied availableVolumeM3 (the envelope is larger than the breach supports). */
   volumeFlag: boolean;
+  /** True when volumeLimit stopped the fill at availableVolumeM3 (cells the uncapped envelope would wet were left dry). */
+  capped: boolean;
   /** The flood reached the DEM edge, so it would spread further than the DEM shows. */
   reachedEdge: boolean;
 };
@@ -212,6 +214,7 @@ export function fillFlood(
   let wetCells = 0;
   let volumeM3 = 0;
   let reachedEdge = false;
+  let capped = false;
   const done = new Uint8Array(N);
   const DI = [1, -1, 0, 0, 1, 1, -1, -1];
   const DJ = [0, 0, 1, -1, 1, -1, 1, -1];
@@ -224,15 +227,18 @@ export function fillFlood(
     const cap = Number.isFinite(stageCap) ? Math.max(0, srcStage[c]) + stageCap : Infinity;
     const d = Math.min(surf - g.z[c], cap);
     if (d >= minDepth) {
+      // Volume-limited fill: stop before a cell would take the laid-down volume past what the breach supplies. The
+      // heap pops highest water first, so every cell still queued carries a lower surface than this one — stopping
+      // trims the shallow, far-spread fringe and keeps the deepest water, and the volume never exceeds the cap.
+      if (volumeM3 + d * cellM2 > volumeCap) {
+        capped = true;
+        break;
+      }
       depthM[c] = d;
       outWse[c] = surf;
       wetCells++;
       volumeM3 += d * cellM2;
       if (wetCells > maxWet) break;
-      // Volume-limited fill: once the laid-down volume reaches what the breach supplies, stop. The heap pops highest
-      // water first, so every cell still queued carries a lower surface than this one — stopping trims the shallow,
-      // far-spread fringe and keeps the deepest water.
-      if (volumeM3 >= volumeCap) break;
     }
     const ci = c % W;
     const cj = (c - ci) / W;
@@ -267,6 +273,7 @@ export function fillFlood(
     floodedAc,
     volumeM3,
     volumeFlag,
+    capped,
     reachedEdge,
   };
 }

@@ -57,6 +57,8 @@ export type SpreadOptions = {
   rough?: RoughnessOptions;
   /** The breach's released volume (m³), for the envelope-to-release ratio. */
   releasedM3?: number;
+  /** Scale every stretch's slice by this factor (default 1); the routed flood uses it to cap the total at the release. */
+  sliceScale?: number;
 };
 
 export type SpreadResult = {
@@ -291,7 +293,7 @@ export function spreadVolume(g: DemGrid, line: Centerline, sections: RoutedSecti
   const sqrtOf = (s: number) => Math.sqrt(Math.max(s, 1e-6));
   for (let j = 0; j + 1 < nS; j++) {
     // The slice shrinks with the water already left behind in depressions upstream (the wave carries less).
-    const v = sections[j].storeMaxM3 * (v0 > 0 ? travelling / v0 : 1);
+    const v = sections[j].storeMaxM3 * (v0 > 0 ? travelling / v0 : 1) * (opts.sliceScale ?? 1);
     const a = counts[j];
     const b = counts[j + 1];
     if (!(v > 0) || b <= a) continue;
