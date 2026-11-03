@@ -24,7 +24,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (!a.startsWith("--")) throw new Error(`unexpected ${a}`);
     const key = a.slice(2);
-    if (key === "volume-limit") o[key] = true;
+    if (key === "volume-limit" || key === "volume-aware") o[key] = true;
     else o[key] = argv[++i];
   }
   for (const k of ["dam", "runner"]) if (!o[k]) throw new Error(`--${k} is required`);
@@ -53,11 +53,15 @@ export async function main(argv, log = console.log) {
   log("Building the routed flood…");
   const rf = await buildRoutedFlood(dam, result, dem, {
     volumeLimit: o["volume-limit"] != null,
+    volumeAware: o["volume-aware"] != null || o["volume-mode"] != null,
+    volumeMode: o["volume-mode"],
+    stationCapM: o["station-cap"] != null ? Number(o["station-cap"]) : undefined,
+    volumeBudgetFactor: o["budget-factor"] != null ? Number(o["budget-factor"]) : undefined,
     slopeFloor: o["slope-floor"] != null ? Number(o["slope-floor"]) : undefined,
     sectionHalfWidthM: o["half-width"] != null ? Number(o["half-width"]) : undefined,
   });
   if (!rf.ok) throw new Error(rf.reason);
-  log(`  routed: peak in ${rf.stats.peakInCfs} cfs → out ${rf.stats.peakOutCfs} cfs (fell ${(rf.stats.routedPeakFellBy * 100).toFixed(0)}%), ${rf.stats.sections} sections, flooded ${rf.stats.floodedAc} ac`);
+  log(`  routed: peak in ${rf.stats.peakInCfs} cfs → out ${rf.stats.peakOutCfs} cfs (fell ${(rf.stats.routedPeakFellBy * 100).toFixed(0)}%), ${rf.stats.sections} sections, flooded ${rf.stats.floodedAc} ac, fill ${rf.stats.fillAcFt} ac-ft, lowered ${rf.stats.loweredSections}`);
   for (const n of rf.notes) log(`  note: ${n}`);
 
   const engine = createEngine();
