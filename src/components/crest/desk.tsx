@@ -37,11 +37,12 @@ import {
   OUTLINE_LABEL,
   outlineAcresNote,
   traceStartNote,
+  deepCellsNote,
   outlineInputs,
   outlineState,
   type OutlineState,
 } from "@/lib/crest/outline";
-import { buildInundationReach, ROUTED_LABEL } from "@/lib/crest/inundation";
+import { buildInundationReach, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
 import { layerOfRecord } from "@/lib/crest/layer-of-record";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
@@ -379,9 +380,9 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
         <h3 className="text-lg">Tied to NAVD88</h3>
         <dl className="mt-3 space-y-2 text-sm">
           <Row k="Crest" v={crestNavdLabel(dam, result.datum)} />
-          <Row k="Streambed" v={result.datum.streambedNavdFt == null ? "not used" : `${num(result.datum.streambedNavdFt, 1)} ft`} />
-          <Row k="Spillway" v={result.datum.spillwayNavdFt == null ? "not used" : `${num(result.datum.spillwayNavdFt, 1)} ft`} />
-          <Row k="Pool" v={result.datum.poolNavdFt == null ? "not used" : `${num(result.datum.poolNavdFt, 1)} ft`} />
+          <Row k="Streambed" v={result.datum.streambedNavdFt == null ? "not used" : `${num(result.datum.streambedNavdFt, 1)} ft NAVD88`} />
+          <Row k="Spillway" v={result.datum.spillwayNavdFt == null ? "not used" : `${num(result.datum.spillwayNavdFt, 1)} ft NAVD88`} />
+          <Row k="Pool" v={result.datum.poolNavdFt == null ? "not used" : `${num(result.datum.poolNavdFt, 1)} ft NAVD88`} />
           <Row k="Offset" v={result.datum.offsetFt == null ? "—" : `${num(result.datum.offsetFt, 2)} ft`} />
         </dl>
         {result.datum.warnings.length > 0 ? (
@@ -621,6 +622,12 @@ function OutlinePanel({
   const layer = outline.state === "ready" ? outline.layer : "outline";
   const rec = layerOfRecord(dam, result, outline);
   const routed = outline.state === "ready" ? outline.routed : undefined;
+  const vol = s ? volumeCheck(routed ? routed.fillAcFt : s.laidAcFt, routed ? routed.releasedAcFt : result.breach.volumeAcFt) : null;
+  const volLine = vol ? (
+    <p className={"mt-1 text-sm " + (vol.warn ? "text-amber" : "text-muted")} role={vol.warn ? "alert" : undefined} data-testid="outline-volume-check">
+      {vol.text}
+    </p>
+  ) : null;
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="outline-panel">
@@ -689,6 +696,12 @@ function OutlinePanel({
               to carry. The flood runs further than this layer shows; a Runner run is the layer of record there.
             </p>
           ) : null}
+          {deepCellsNote(s) ? (
+            <p className="mt-1 text-xs text-amber" role="status" data-testid="outline-deep-cells">
+              {deepCellsNote(s)}
+            </p>
+          ) : null}
+          {volLine}
           {routed.notes.length ? (
             <p className="mt-1 text-xs text-amber" data-testid="routed-flags">
               {routed.notes.join(" ")}
@@ -712,9 +725,15 @@ function OutlinePanel({
           <p className="mt-2 text-sm" data-testid="outline-acres-note">
             {outlineAcresNote(s)}
           </p>
+          {volLine}
           {traceStartNote(s) ? (
             <p className="mt-1 text-sm" data-testid="outline-trace-start">
               {traceStartNote(s)}
+            </p>
+          ) : null}
+          {deepCellsNote(s) ? (
+            <p className="mt-1 text-xs text-amber" role="status" data-testid="outline-deep-cells">
+              {deepCellsNote(s)}
             </p>
           ) : null}
           <p className="mt-1 text-xs text-muted">
