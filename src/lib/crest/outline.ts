@@ -61,16 +61,13 @@ export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300
 export const TRACE_VERSION = 2;
 
 /**
- * Margin (ft) over the dam height: a breach cannot stand water deeper than the dam that held it back plus this, so a
- * deeper cell is a pit, pond, quarry or DEM sink under the water surface, not a flood depth. Such cells stay wet (the
- * extent is unchanged) but their depth is clamped to the cap and counted, so one 200 ft sink no longer sets a band's
- * depth or the depth bias against a model run (DWR-2801 +49 ft, ND00199 275.8 ft).
+ * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
+ * that held it back, so a deeper cell is a pit, pond, quarry or DEM sink under the water surface, not a flood depth.
+ * Such cells stay wet (the extent is unchanged) but their depth is clamped to the cap and counted, so one 200 ft sink
+ * no longer sets a band's depth or the depth bias against a model run (DWR-2801 +49 ft, ND00199 275.8 ft).
  */
-export const DEPTH_CAP_MARGIN_FT = 10;
-
-/** The depth cap (ft) for a dam: its height + DEPTH_CAP_MARGIN_FT, or no cap when the height is unknown. */
 export function depthCapFt(heightFt: number | null | undefined): number {
-  return typeof heightFt === "number" && Number.isFinite(heightFt) && heightFt > 0 ? heightFt + DEPTH_CAP_MARGIN_FT : Infinity;
+  return typeof heightFt === "number" && Number.isFinite(heightFt) && heightFt > 0 ? heightFt : Infinity;
 }
 
 /** Cells deeper than the cap (pits, ponds, sinks), clamped and flagged. */
@@ -119,7 +116,7 @@ export function deepCellsOf(depthFt: ArrayLike<number>, capFt: number, scale = 1
 export function deepCellsNote(s: Pick<OutlineStats, "deepCells">): string | null {
   const d = s.deepCells;
   if (!d) return null;
-  return `${d.cells.toLocaleString()} cell${d.cells === 1 ? "" : "s"} under the water surface sit deeper than the dam height + ${DEPTH_CAP_MARGIN_FT} ft (${d.capFt.toFixed(0)} ft; deepest ${d.rawMaxFt.toFixed(0)} ft), likely pits, ponds or terrain sinks. They stay in the extent, but their depth is capped at ${d.capFt.toFixed(0)} ft in the bands and exports. Check them on the map.`;
+  return `${d.cells.toLocaleString()} cell${d.cells === 1 ? "" : "s"} under the water surface sit deeper than the dam height (${d.capFt.toFixed(1)} ft; deepest ${d.rawMaxFt.toFixed(0)} ft), likely pits, ponds or terrain sinks. They stay in the extent, but their depth is capped at the dam height in the bands and exports. Check them on the map.`;
 }
 
 /** Margin (m) added around the corridor box when fetching the DEM, so the drainage trace has room to bend. */
@@ -175,7 +172,7 @@ export type OutlineStats = {
    * way (the routed/spread flood), so a reader never takes 0 as "none dropped / none filled". */
   droppedPatches: number | null;
   filledHoles: number | null;
-  /** Cells deeper than the dam height + DEPTH_CAP_MARGIN_FT, clamped (absent when none, or on older layers). */
+  /** Cells deeper than the dam height, clamped (absent when none, or on older layers). */
   deepCells?: DeepCells;
   /** Water laid down by the layer (ac-ft, from the clamped cell depths), when measured. */
   laidAcFt?: number;
@@ -1086,7 +1083,7 @@ async function buildOutlineImpl(
     if (depth[k] < 0 && dom[k] && valid(k) && dryC.sizes[dryC.lab[k]] < MIN_CELLS && !dryC.border[dryC.lab[k]]) depth[k] = WET_M;
   await breathe(N);
 
-  // Depth cap (dam height + margin): deeper cells are pits/sinks under the surface, clamped and flagged.
+  // Depth cap (dam height, no margin): deeper cells are pits/sinks under the surface, clamped and flagged.
   const capFt = depthCapFt(dam.heightFt);
   const deepCells = deepCellsOf(depth, capFt, FT);
   let laidM3 = 0;
