@@ -4,12 +4,13 @@
  * and outline. One-off, for the baseline comparison (Nick, 2026-11-02); not part of the app.
  *
  *   node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --runner <dam folder> [--json out.json]
- *     [--spread [--breach-path] [--no-basins] [--no-reach]] [--probes 300]
+ *     [--spread [--breach-path] [--no-basins] [--no-reach]] [--probes 300] [--wet-ft 0.1]
  *
  * --spread scores the quasi-dynamic volume spread (spread.ts) instead of the stage fill; --breach-path makes it
  * follow the water from the breach instead of the outline's drainage trace; --no-basins turns off closed-basin storage;
  * --no-reach builds once on the corridor DEM instead of growing the terrain downstream on demand (reach.ts, what the
- * desk does). --probes sets how many points on the model's wet cells compare depth, velocity and arrival.
+ * desk does). --probes sets how many points on the model's wet cells compare depth, velocity and arrival. --wet-ft
+ * scores both layers as wet at that depth instead of 0.1 ft (1 ft is where the 2-D models agree with each other).
  *
  * It fetches the same corridor DEM the terrain outline uses (grown downstream on demand for the spread), builds the
  * routed flood on it, and scores its depth grid (the harness's lonlat candidate) against the Runner rasters.
@@ -39,13 +40,13 @@ function parseArgs(argv) {
 }
 
 /** Even-stride probe points on the reference run's wet cells (downstream of the breach when known). */
-export function probePoints(ref, downstream, want) {
+export function probePoints(ref, downstream, want, wetFt = 0.1) {
   const g = ref.grid;
   const wet = [];
   for (let r = 0; r < g.height; r++)
     for (let c = 0; c < g.width; c++) {
       const i = r * g.width + c;
-      if (!(g.depth[i] >= 0.1)) continue;
+      if (!(g.depth[i] >= wetFt)) continue;
       const [lon, lat] = ref.proj.inv(g.x0 + (c + 0.5) * g.dx, g.y0 - (r + 0.5) * g.dy);
       if (downstream) {
         const e = (lon - downstream.lon) * 111320 * Math.cos((downstream.lat * Math.PI) / 180);
@@ -131,12 +132,14 @@ export async function main(argv, log = console.log) {
   };
   // Probe receptors: about --probes points on the model's wet cells downstream of the breach (an even stride), so
   // depth, velocity and arrival can be compared where the model says there is water.
-  const points = probePoints(ref, downstream, Number(o.probes ?? 300));
-  const report = validate(cand, ref, { label: `routed terrain flood (${rf.method})`, reference: summary.label, points, downstream });
+  const wetFt = o["wet-ft"] != null ? Number(o["wet-ft"]) : undefined;
+  if (wetFt != null && !(wetFt > 0)) throw new Error("--wet-ft needs a depth in feet");
+  const points = probePoints(ref, downstream, Number(o.probes ?? 300), wetFt ?? 0.1);
+  const report = validate(cand, ref, { label: `routed terrain flood (${rf.method})`, reference: summary.label, points, downstream, wetFt });
   log("\n" + formatReport(report));
 
   if (o.json) {
-    writeFileSync(o.json, JSON.stringify({ dam: dam.id, runner: o.runner, routed: rf.stats, reach, dem: { width: dem.width, height: dem.height, cellM: dem.cellM, bbox: dem.bbox }, report }, null, 2));
+    writeFileSync(o.json, JSON.stringify({ dam: dam.id, runner: o.runner, wetFt: wetFt ?? 0.1, routed: rf.stats, reach, dem: { width: dem.width, height: dem.height, cellM: dem.cellM, bbox: dem.bbox }, report }, null, 2));
     log(`\nWrote ${o.json}`);
   }
   return report;
