@@ -128,6 +128,9 @@ function routedCache(
     volumeRatio: routed.stats.volumeRatio,
     method: routed.method,
     reachedEdge: routed.stats.reachedEdge,
+    exhaustedStretches: routed.stats.exhaustedStretches,
+    cappedStretches: routed.stats.cappedStretches,
+    unpouredAcFt: routed.stats.unpouredAcFt,
     notes: routed.notes,
   };
   return { fingerprint, builtAt: new Date().toISOString(), source: DEM_SERVICE, attribution: DEM_ATTRIBUTION, stats, outline: poly.outline, layer: "routed", routed: r };
