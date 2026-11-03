@@ -583,8 +583,15 @@ export function analyze(dam: DamRecord): Analysis {
     return { depthFt, velocityFps, arrival, flooded, rank };
   };
   const receptors = dam.receptors.map((r) => {
+    // A receptor seeded with only a station fraction (no distanceKm) sits at that fraction of the
+    // reach, not of the decay scale baseM. station is a 0..1 position along the valley strip (it is
+    // reported back as xM / lengthM below), so station * lengthM round-trips it. Using baseM (~the
+    // flow-width scale, often a few hundred metres) collapsed every generic seed to just below the
+    // breach, where the desk curve is deepest and fastest, over-ranking its TM 11 zone.
     const xM =
-      r.distanceKm != null && Number.isFinite(r.distanceKm) ? Math.max(0, r.distanceKm * 1000) : Math.max(0, r.station) * baseM;
+      r.distanceKm != null && Number.isFinite(r.distanceKm)
+        ? Math.max(0, r.distanceKm * 1000)
+        : Math.max(0, r.station) * lengthM;
     const outsideAoi = aoi != null && (!aoi.coversDownstream || xM > aoi.farM || xM < aoi.nearM);
     const unresolved = outsideAoi || xM > resolvedM;
     const base = {
