@@ -58,8 +58,9 @@ const M_PER_DEG_LON_EQ = 111320;
 export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300), 2000);
 /** Bumped when the terrain request or the trace changes, so layers saved before rebuild. 2 = 2026-11-03: exact DEM
  *  box (adjustAspectRatio=false), toe start, trace margin. 3 = 2026-11-03: the routed flood's demand-driven downstream
- *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). */
-export const TRACE_VERSION = 3;
+ *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). 4 = 2026-11-03: the outline leaves out pit, pond and
+ *  side-basin storage and bands on the capped depth. */
+export const TRACE_VERSION = 4;
 
 /**
  * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
@@ -80,6 +81,8 @@ export type DeepCells = { capFt: number; cells: number; rawMaxFt: number };
  * 2–5 ft band). Returns an accumulator; call add(rawFt) per cell, then done().
  */
 export function bandDepthAcc(b: number, capFt: number) {
+  // A band can only hold cells at or under the cap (they are banded on the capped depth), so its stats never run past
+  // the cap either: on a dam under 10 ft the "10 ft and deeper" band is never formed, rather than reporting 10 ft.
   const lo = DEPTH_BANDS[b].minFt;
   const hi = Math.max(lo, Math.min(DEPTH_BANDS[b].maxFt, capFt));
   let dMax = -Infinity;
@@ -113,12 +116,28 @@ export function deepCellsOf(depthFt: ArrayLike<number>, capFt: number, scale = 1
   return cells ? { capFt: Math.round(capFt * 10) / 10, cells, rawMaxFt: Math.round(rawMaxFt * 10) / 10 } : undefined;
 }
 
+/** Cells whose depth the outline re-measured from a pit's spill level or a side basin's own drainage level. */
+export type PitsExcluded = { cells: number; acFt: number };
+
+/** One line for the desk when pit and pond water was left out, or null. */
+export function pitsExcludedNote(s: Pick<OutlineStats, "pitsExcluded">): string | null {
+  const p = s.pitsExcluded;
+  if (!p) return null;
+  return `At least ${Math.round(p.acFt).toLocaleString()} ac-ft of pit, pond and low-basin storage (${p.cells.toLocaleString()} cells) is left out: off the traced channel, depth counts from a pit's spill level, and ground draining lower than the channel bed takes the flow depth rather than the channel's whole surface.`;
+}
+
 /** One line for the desk when cells were clamped, or null. */
 export function deepCellsNote(s: Pick<OutlineStats, "deepCells">): string | null {
   const d = s.deepCells;
   if (!d) return null;
   return `${d.cells.toLocaleString()} cell${d.cells === 1 ? "" : "s"} under the water surface sit deeper than the dam height (${d.capFt.toFixed(1)} ft; deepest ${d.rawMaxFt.toFixed(0)} ft), likely pits, ponds or terrain sinks. They stay in the extent, but their depth is capped at the dam height in the bands and exports. Check them on the map.`;
 }
+
+/**
+ * A cell is in a closed depression (pit, pothole, dry pond) when the drainage fill stands this far above its ground.
+ * 0.03 m keeps the fill's 1e-5 m epsilon and DEM noise out.
+ */
+export const PIT_TOL_M = 0.03;
 
 /** Margin (m) added around the corridor box when fetching the DEM, so the drainage trace has room to bend. */
 export const TRACE_PAD_M = 500;
@@ -175,6 +194,8 @@ export type OutlineStats = {
   filledHoles: number | null;
   /** Cells deeper than the dam height, clamped (absent when none, or on older layers). */
   deepCells?: DeepCells;
+  /** Pit, pond and side-basin water the outline no longer counts (absent when none, or on older layers). */
+  pitsExcluded?: PitsExcluded;
   /** Water laid down by the layer (ac-ft, from the clamped cell depths), when measured. */
   laidAcFt?: number;
 };
@@ -717,7 +738,7 @@ export function polygonizeDepth(
   // Depth bands + one 3×3 mode pass, as the outline does.
   const idx = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
   const band0 = new Int8Array(N).fill(-1);
-  for (let k = 0; k < N; k++) if (wet(k)) band0[k] = idx.get(bandFor(Math.max(WET_FT, depthFt[k])).id)!;
+  for (let k = 0; k < N; k++) if (wet(k)) band0[k] = idx.get(bandFor(Math.max(WET_FT, Math.min(capFt, depthFt[k]))).id)!;
   const band = new Int8Array(band0);
   const cnt = new Int32Array(DEPTH_BANDS.length);
   for (let j = 0; j < H; j++)
@@ -1093,16 +1114,40 @@ async function buildOutlineImpl(
     }
     if ((head & 0x3ffff) === 0) await breathe(0x40000);
   }
+  // Pits, ponds and side basins (Docs & QA on #57, 2026-11-03). The channel's surface is fill + d at the channel, and a
+  // cell used to take it whole: ground that drains to a lower level than that channel bed (a pond or low basin beside a
+  // steep reach, DWR-4031's 1567 ft pond under a 1584 ft bed) stood 17–21 ft deep, and a closed pothole off the channel
+  // counted its whole bowl. Neither is water the breach can lay there: water reaching a lower basin runs on down it at
+  // about the flow depth, and a pothole off the channel is water already there (or storage a small release never fills).
+  // So each cell's surface is the lower of the channel's and its own drainage level (fill) plus the channel's flow
+  // depth, and an off-channel pit counts only the water above its spill level. Cells left with less than 0.1 ft fall out
+  // of the extent, and anything reached only through them falls out with it (the 4-neighbour flood below).
+  const onChannel = new Uint8Array(N);
+  for (const k of path) onChannel[k] = 1;
+  // Closed depressions (filled above the ground by more than PIT_TOL_M) that the traced channel passes through: the
+  // breach flow runs through these and fills them, so their bowl counts. Others are off the channel.
+  const pitC = components(W, H, (k) => !!dom[k] && fill[k] - g.z[k] > PIT_TOL_M);
+  const pitOnChannel = new Uint8Array(pitC.sizes.length);
+  for (const k of path) if (pitC.lab[k] > 0) pitOnChannel[pitC.lab[k]] = 1;
+  await breathe(N);
+  const offPit = (m: number) => pitC.lab[m] > 0 && !pitOnChannel[pitC.lab[m]];
+  /** Water surface at a cell: the channel's, no higher than the cell's own drainage level plus the flow depth there. */
+  const wseAt = (m: number) => {
+    const s0 = src[m];
+    return Math.min(wseC[s0], fill[m] + (wseC[s0] - fill[s0]));
+  };
+  /** The floor water is measured from: the ground, or an off-channel pit's spill level. */
+  const floorAt = (m: number) => (offPit(m) ? fill[m] : g.z[m]);
   const depth = new Float32Array(N).fill(-1);
   const under = (m: number) => {
     const s0 = src[m];
-    return s0 >= 0 && along[m] <= inp.lastX && wseC[s0] - g.z[m] >= WET_M - 1e-9;
+    return s0 >= 0 && along[m] <= inp.lastX && wseAt(m) - floorAt(m) >= WET_M - 1e-9;
   };
   const inRoom = (m: number) => dist2(m, src[m]) * cellM2 <= roomC[src[m]] * roomC[src[m]];
   tail = 0;
   for (const k of path)
     if (depth[k] < 0 && under(k)) {
-      depth[k] = wseC[k] - g.z[k];
+      depth[k] = wseAt(k) - floorAt(k);
       q[tail++] = k;
     }
   let hitsCorridor = false;
@@ -1116,12 +1161,25 @@ async function buildOutlineImpl(
         hitsCorridor = true;
         continue;
       }
-      depth[m] = wseC[src[m]] - g.z[m];
+      depth[m] = wseAt(m) - floorAt(m);
       q[tail++] = m;
     }
     if ((head & 0x3ffff) === 0) await breathe(0x40000);
   }
   if (tail === 0) return { ok: false, reason: "No terrain outline: no ground connected to the channel lies under the desk water surface." };
+  // What the rebasing took out of the cells still in the extent, against the channel's surface taken whole (cells that
+  // fell out of the extent are not counted, so this is a floor): for the desk note.
+  let pitCells = 0;
+  let pitM3 = 0;
+  for (let k = 0; k < N; k++) {
+    if (depth[k] < 0) continue;
+    const old = wseC[src[k]] - g.z[k];
+    const now = depth[k];
+    if (old - now > PIT_TOL_M) {
+      pitCells++;
+      pitM3 += (old - now) * cellM2;
+    }
+  }
 
   // Specks and pinholes.
   const wetC = components(W, H, (k) => depth[k] >= 0);
@@ -1148,7 +1206,7 @@ async function buildOutlineImpl(
   // Bands, one 3 × 3 mode pass.
   const band0 = new Int8Array(N).fill(-1);
   const idx = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
-  for (let k = 0; k < N; k++) if (depth[k] >= 0) band0[k] = idx.get(bandFor(Math.max(WET_FT, depth[k] / FT)).id)!;
+  for (let k = 0; k < N; k++) if (depth[k] >= 0) band0[k] = idx.get(bandFor(Math.max(WET_FT, Math.min(capFt, depth[k] / FT))).id)!;
   const band = new Int8Array(band0);
   const cnt = new Int32Array(DEPTH_BANDS.length);
   for (let j = 0; j < H; j++) {
@@ -1253,6 +1311,7 @@ async function buildOutlineImpl(
     droppedPatches,
     filledHoles,
     ...(deepCells ? { deepCells } : {}),
+    ...(pitCells ? { pitsExcluded: { cells: pitCells, acFt: r3(pitM3 / ACRE_FT_M3) } } : {}),
     laidAcFt: r3(laidM3 / ACRE_FT_M3),
   };
   const outline: TerrainOutline = {

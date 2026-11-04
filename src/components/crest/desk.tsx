@@ -38,6 +38,7 @@ import {
   outlineAcresNote,
   traceStartNote,
   deepCellsNote,
+  pitsExcludedNote,
   outlineInputs,
   outlineState,
   type OutlineState,
@@ -729,6 +730,11 @@ function OutlinePanel({
           {traceStartNote(s) ? (
             <p className="mt-1 text-sm" data-testid="outline-trace-start">
               {traceStartNote(s)}
+            </p>
+          ) : null}
+          {pitsExcludedNote(s) ? (
+            <p className="mt-1 text-xs text-muted" data-testid="outline-pits-excluded">
+              {pitsExcludedNote(s)}
             </p>
           ) : null}
           {deepCellsNote(s) ? (
