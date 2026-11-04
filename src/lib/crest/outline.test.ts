@@ -369,6 +369,9 @@ describe("pits and ponds off the channel are not flood storage (Docs & QA on #57
     // The extent moves only by the band polygons' smoothing around the dug cells.
     assert.ok(Math.abs(after.outlineAc - before.outlineAc) < 10, `${before.outlineAc} → ${after.outlineAc}`);
     assert.equal(after.bands.find((b) => b.band === "d5")?.ac, before.bands.find((b) => b.band === "d5")?.ac);
+    // The desk's pit note is driven by pitsExcluded, which every terrain outline that re-measured a cell carries.
+    assert.ok(after.pitsExcluded && after.pitsExcluded.acFt > 0, JSON.stringify(after.pitsExcluded));
+    assert.ok(pitsExcludedNote(after));
   });
 
   it("says how much pit and low-basin storage it left out", () => {

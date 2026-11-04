@@ -49,15 +49,15 @@ export const useDesk = create<DeskState>()(
 );
 
 /**
- * Apply a desk edit to a record. A crest typed over the stored one drops the stored datum note (e.g. "Crest converted
+ * Apply a desk edit to a record. A crest or streambed typed over the stored one drops the stored datum note (e.g. "Crest converted
  * from NGVD29 …"): the note described the old number, and left in place it kept riding on the record's datum_rule and
  * datum_note after the retype (DWR-4031 QA, 2026-11-03). Everything else is a plain merge.
  */
 export function applyPatch(d: DamRecord, patch: Partial<DamRecord>): DamRecord {
   const next = { ...d, ...patch, id: d.id };
-  if ("crestFt" in patch && patch.crestFt !== d.crestFt && !("datumNote" in patch)) {
-    delete next.datumNote;
-  }
+  // The crest and the streambed are both elevations the note's conversion was applied to, so retyping either clears it.
+  const retyped = (["crestFt", "streambedFt"] as const).some((f) => f in patch && patch[f] !== d[f]);
+  if (retyped && !("datumNote" in patch)) delete next.datumNote;
   return next;
 }
 
