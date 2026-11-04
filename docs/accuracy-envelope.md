@@ -19,6 +19,12 @@ a Crest footprint is good enough to screen with and where it is not, so nobody h
 **The one hard rule:** if the routed layer carries the *incomplete downstream* alert, the dam needs a Runner run. That
 alert is the signal that separates the low-confidence class from the others on all four baselines.
 
+**Per-dam triage uses these classes.** Crest's triage call (`src/lib/crest/triage.ts`, `CONFIDENCE_LABEL` /
+`RECOMMENDATION_LABEL`) maps them to three confidence words: **High** = confined valley or closed basin, **Medium** =
+open terrain (incised valley and tiny pool; read the footprint as a minimum, and on a tiny pool don't trust its
+depths), **Low** = incomplete downstream. If a class name changes here, change those strings in the same PR. Design
+and baseline results: project folder `crest-inundation/triage-2026-11-04/RESULTS.md`.
+
 ## Why 1 ft is the honest number
 
 At 0.1 ft, a CSI mostly measures a thin sheet of water a few inches deep on a flat plain, and the refined 2-D models
