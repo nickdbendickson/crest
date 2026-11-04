@@ -7,7 +7,8 @@
   references agree with each other there). Confined valley / basin (DWR-3034) high, CSI 0.63 at 1 ft; incised valley
   (2865) medium, 0.31; tiny pool (4031) extent only, 0.10 at 1 ft; flat multi-channel plain (2801) low, 0.18, run the
   Runner. An *incomplete downstream* alert on the routed layer means the dam needs a Runner run. The 0.35 CSI floor is
-  retired: LISFLOOD-FP agrees with ANUGA and DSS-WISE on 2801 only at 0.34–0.46 at 0.1 ft.
+  retired: LISFLOOD-FP, ANUGA and DSS-WISE agree with each other on 2801 only at 0.34–0.49 at 0.1 ft. 2801 against
+  all three references: CSI 0.16–0.21 at 1 ft (median 0.175).
 
 ## 2026-11-03
 
