@@ -46,6 +46,13 @@ describe("applyPatch (Docs & QA on #57: a stale NGVD29 note after the crest is r
     assert.equal(next.datumNote, undefined);
     assert.equal(analyze(next).datum.rule, "Elevations treated as NAVD88.");
   });
+  it("a typed streambed clears it the same way (Docs & QA on #64)", () => {
+    const next = applyPatch(dam, { streambedFt: (dam.streambedFt ?? 0) + 1 });
+    assert.equal(next.datumNote, undefined);
+    assert.equal(next.crestFt, dam.crestFt);
+    assert.equal(analyze(next).datum.rule, "Elevations treated as NAVD88.");
+    assert.equal(applyPatch(dam, { streambedFt: dam.streambedFt }).datumNote, dam.datumNote);
+  });
   it("other edits, the same crest, or a patch that sets the note itself keep it", () => {
     assert.equal(applyPatch(dam, { name: "x" }).datumNote, dam.datumNote);
     assert.equal(applyPatch(dam, { crestFt: 1630.46 }).datumNote, dam.datumNote);
