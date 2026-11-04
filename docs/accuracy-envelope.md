@@ -14,7 +14,9 @@ a Crest footprint is good enough to screen with and where it is not, so nobody h
 | **Confined valley or closed basin** | flood ends in a basin or is contained in 0 reach rounds; no incomplete alert | DWR-3034 Wachter Ranch 11 | 0.70 | **0.63** | **High** | Screen with Crest. Precision 96–97 %: what it floods, floods. |
 | **Incised valley, moderate release** | contained after the reach grows (no incomplete alert) | DWR-2865 Van Osting | 0.30 | **0.31** | **Medium** | Screen, but read the footprint as a *minimum*: recall 41–50 %, depth 1–2 ft shallow. A receptor just outside it is not cleared. |
 | **Tiny pool, thin sheet** (release ≲ 10 ac-ft) | release in ac-ft is small; contained in 0 rounds | DWR-4031 Ward County | 0.35 | **0.10** | **Extent medium, depth low** | Use for "is anything in reach". Do not use the depth: only 8 ac of the Runner's flood is ≥ 1 ft deep, so one-foot depths are noise both ways. |
-| **Flat multi-channel plain, large release** (2-D sheet flow) | **incomplete-downstream alert** (reach hit its round cap with water stranded at the edge) | DWR-2801 Swan Buffalo 12 (Absaraka) | 0.23 | **0.18** | **Low** | **Run the Runner.** Crest's footprint is the wrong shape there (pools deeper and narrower than the sheet), and the 2-D references disagree with each other too. |
+| **Flat multi-channel plain, large release** (2-D sheet flow) | **incomplete-downstream alert** (reach hit its round cap with water stranded at the edge) | DWR-2801 Swan Buffalo 12 (Absaraka) | 0.23 | **0.18** | **Low** | **Run the Runner.** Crest's footprint is the wrong shape there (pools deeper and narrower than the sheet), and the 2-D references disagree with each other too. Against ANUGA and DSS-WISE: 0.24 / 0.16 and 0.29 / 0.21. |
+
+CSI columns are against LISFLOOD-FP, the Runner. 2801 also has ANUGA and DSS-WISE references (below).
 
 **The one hard rule:** if the routed layer carries the *incomplete downstream* alert, the dam needs a Runner run. That
 alert is the signal that separates the low-confidence class from the others on all four baselines.
@@ -34,15 +36,20 @@ DWR-2801, downstream half-plane only:
 | Reference pair | CSI 0.1 ft | CSI 0.5 ft | CSI 1 ft | Source |
 |---|---|---|---|---|
 | LISFLOOD-FP (Oct 30, 30 m) vs ANUGA (30 m) | 0.46 | — | **0.58** | harness report `Crest_CSI_DWR-2801.docx`, 2026-11-03 |
-| LISFLOOD-FP (baseline, 20 m) vs DSS-WISE (8 ft cells, unofficial) | 0.34 | 0.35 | **0.41** | this page (DSS-WISE averaged to 20 m; max-resampled: 0.36 / 0.37 / 0.43) |
+| LISFLOOD-FP (baseline, 20 m) vs ANUGA | 0.49 | 0.50 | **0.51** | this page, on ANUGA's 30 m grid |
+| ANUGA vs DSS-WISE (8 ft cells, unofficial) | 0.45 | 0.45 | **0.49** | this page, on ANUGA's 30 m grid |
+| LISFLOOD-FP (baseline, 20 m) vs DSS-WISE | 0.34 | 0.35 | **0.43** | this page, on ANUGA's 30 m grid (on the 20 m Runner grid: 0.34 / 0.35 / 0.41) |
+
+Agreement at 1 ft is as good or better than at 0.1 ft for every pair, never worse. Area is where they split most:
+at 0.1 ft the three models wet 3,473–6,783 ac (a 2× range), at 1 ft 1,850–2,414 ac (1.3×).
 
 So no single model is ground truth on a flat plain, and the 1 ft score is the one that is stable across references.
 Quote the 1 ft CSI as the headline and the 0.1 ft CSI next to it, never the 0.1 ft one alone.
 
-**Retire 0.35 as a floor.** Two refined 2-D models of DWR-2801 agree with each other at 0.34–0.46 at 0.1 ft. A fixed
+**Retire 0.35 as a floor.** The refined 2-D models of DWR-2801 agree with each other at only 0.34–0.49 at 0.1 ft. A fixed
 0.35 bar would fail one accepted model against another. Judge Crest by class (table above) and, on flat plains,
-against the spread between the references: Crest's 2801 score at 1 ft (0.18–0.21) is about a third to a half of the
-model-to-model agreement (0.41–0.58). That gap is why the class is "Low", not the absolute number.
+against the spread between the references: Crest's 2801 score at 1 ft (0.16–0.21 across the three references) is about a
+third of the model-to-model agreement (0.43–0.58). That gap is why the class is "Low", not the absolute number.
 
 ## Scores behind the map
 
@@ -69,7 +76,8 @@ right; area ratio = Crest acres / reference acres; bias = Crest − reference de
 |---|---|---|---|
 | R1 LISFLOOD-FP, baseline-2026-11-01 (20 m; 6,144 ac wet ≥ 0.1 ft downstream) | 0.227 | 0.175 | the layer of record for these baselines |
 | R3 DSS-WISE (unofficial, 8 ft cells; 3,165 ac wet ≥ 0.1 ft downstream) | 0.291 | 0.214 | recall 51–55 %, precision 27–38 %; Crest over-floods at 1 ft (1.9× area) |
-| R2 ANUGA (Oct 30, 30 m; 5,334 ac wet ≥ 0.1 ft downstream) | 0.15 | 0.19 | **pre-#63** (main 56800ca, stand-in record, bearing 103°), from the harness report; not re-scored here because the raster is on Nick's workstation |
+| R2 ANUGA (Oct 30, 30 m; 5,334 ac wet ≥ 0.1 ft downstream) | 0.237 | 0.162 | recall 37–39 %, precision 22–40 %, area ratio 0.91 / 1.77; depth bias +1.2 / +0.8 ft. Before #63 (56800ca, harness report): 0.15 / 0.19 |
+| **Median of the three** | **0.237** | **0.175** | |
 
 Two LISFLOOD-FP runs of 2801 exist and disagree: the 20 m baseline wets 6,948 ac, the Oct 30 30 m run wets 9,325 ac at
 0.1 ft (+34 %, same model). That spread is itself thin-sheet extent, which is another reason to headline 1 ft.
@@ -112,6 +120,9 @@ node --experimental-strip-types scripts/score-routed.mjs --dam <record.json> --r
   --spread --wet-ft 1 --json out-1.json
 ```
 
+The importer recognises a depth raster by its name: pass a lone ANUGA tif as `lisflood_hmax_ft.tif` (in its own
+folder), a DSS-WISE one with `Hmax_ft` in its name.
+
 Baseline records and LISFLOOD-FP rasters: project folder `crest-inundation/baseline-2026-11-01/<dam>/`. Score files
 for this page and the model-to-model script: `crest-inundation/accuracy-envelope-2026-11-04/`. Cite a CSI only with
 its reference, threshold, record, and scorer commit.
@@ -123,5 +134,5 @@ its reference, threshold, record, and scorer commit.
 | Scorer | `nickdbendickson/crest` `main` 6bb9869, `score-routed.mjs --spread` (reach on) |
 | R1 LISFLOOD-FP 2801 | `baseline-2026-11-01/DWR-2801/Depth (Max).tif`, sha256 `e89a67b6…c64c8fe` |
 | R3 DSS-WISE 2801 | `119062_Hmax_ft_upto_final.tif`, sha256 `25fd0d88…58ddc9a2` |
-| R2 ANUGA 2801 | Nick's workstation `hz2210_classify_20261030T1948Z/Dams/DWR-2801/_breach_model/anuga_hmax_ft.tif` (not in this run) |
+| R2 ANUGA 2801 | `DWR-2801_ANUGA_max_depth_ft_EPSG5070.tif` (Nick, 2026-11-04; 30 m; its downstream wet areas, 5,334 / 2,117 ac, match the harness report's `hz2210…/anuga_hmax_ft.tif` exactly), sha256 `9779c608…cd88f0c` |
 | Records | `baseline-2026-11-01/<dam>/<dam>_record.json` |
