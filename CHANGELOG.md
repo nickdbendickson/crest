@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-11-04
+
+- **The spread pours each stretch on the ground beside it, not on a stripe due north or south of it.** Each stretch of
+  the routed channel pours its water on the cells nearest it. "Nearest" was counted in grid steps (a 4-neighbour
+  search), and by that count a point off a slanting channel is equally near a long run of it: whole grid columns went
+  to one channel cell, so on the flat DWR-2801 plain the flood came out as a comb of north-south stripes up to 3 km off
+  the channel, deep where a stripe crossed a low and dry between. Nearest is now the straight-line distance. Four-dam
+  re-score against LISFLOOD-FP (CSI at 0.1 ft / 1 ft): DWR-2801 0.227 → 0.255 / 0.175 → 0.191, DWR-2865 0.295 → 0.318 /
+  0.311 → 0.282, DWR-3034 0.701 → 0.694 / 0.633 → 0.653, DWR-4031 0.354 → 0.369 / 0.101 → 0.159. Saved routed layers ask
+  to be built again.
+- **Water that tops a saddle fills the low behind it lowest ground first.** Every cell behind a saddle shares its spill
+  height; the pour laid the overflow over them in raster order (north row first) and solved its level with cells above
+  it counted at negative depth. It now fills the low from its lowest cell and holds the slice exactly.
+
 ## 2026-11-03
 
 - **The routed flood grows its terrain downstream on demand (issue #62).** The terrain box was sized from the schematic
