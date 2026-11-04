@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-04
+
+- **Published accuracy envelope (`docs/accuracy-envelope.md`).** A trust map of where a Crest footprint can screen and
+  where it needs a Runner run, scored on all four baselines at 0.1 ft and 1 ft (1 ft is the headline: the 2-D
+  references agree with each other there). Confined valley / basin (DWR-3034) high, CSI 0.63 at 1 ft; incised valley
+  (2865) medium, 0.31; tiny pool (4031) extent only, 0.10 at 1 ft; flat multi-channel plain (2801) low, 0.18, run the
+  Runner. An *incomplete downstream* alert on the routed layer means the dam needs a Runner run. The 0.35 CSI floor is
+  retired: LISFLOOD-FP agrees with ANUGA and DSS-WISE on 2801 only at 0.34–0.46 at 0.1 ft.
+
 ## 2026-11-03
 
 - **The routed flood grows its terrain downstream on demand (issue #62).** The terrain box was sized from the schematic
