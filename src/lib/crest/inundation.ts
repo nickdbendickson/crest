@@ -72,8 +72,9 @@ export type VolumeCheck = {
 
 /**
  * Volume laid down vs released, with a warning outside VOLUME_RATIO_BAND. null when either is unknown. `rawLaidAcFt`
- * is what the outline laid before the volume soft limit lowered it (outline.ts VolumeLimit): the warning stays on
- * when that was over the band, and says the layer was limited.
+ * is what the outline laid before the volume soft limit lowered it (outline.ts VolumeLimit): the text says the layer
+ * was limited. Amber (warn) outside the band or on a release under SMALL_RELEASE_ACFT; a limited layer back inside the
+ * band is neutral.
  */
 export function volumeCheck(
   laidAcFt: number | null | undefined,
@@ -86,13 +87,18 @@ export function volumeCheck(
   const { lo, hi } = VOLUME_RATIO_BAND;
   const raw = typeof opts.rawLaidAcFt === "number" && Number.isFinite(opts.rawLaidAcFt) ? opts.rawLaidAcFt / releasedAcFt : null;
   const limited = raw != null && raw > hi;
-  const warn = ratio < lo || ratio > hi || limited;
+  const outside = ratio < lo || ratio > hi;
+  const small = smallRelease(releasedAcFt);
+  // Amber outside the band and on releases under SMALL_RELEASE_ACFT; a volume-limited layer that ends up inside the
+  // band (about VOLUME_TARGET_RATIO ×) reads neutral (Nick, 2026-11-03 22:43 CST).
+  const warn = outside || small;
   const n = (x: number) => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString("en-US"));
-  const label = smallRelease(releasedAcFt) ? SMALL_RELEASE_LABEL : null;
+  const label = small ? SMALL_RELEASE_LABEL : null;
   const base = `Volume: ${n(laidAcFt)} ac-ft laid down for ${n(releasedAcFt)} ac-ft released (${ratio.toFixed(1)}×).`;
   const text = limited
-    ? `${base} Volume-limited: as first laid it held ${n(opts.rawLaidAcFt!)} ac-ft (${raw.toFixed(1)}×, above ${hi}×), so its water surface was lowered to about ${VOLUME_TARGET_RATIO}×. Its extent and depths are a soft-limited estimate; check against a model run.`
-    : !warn
+    ? `${base} Volume-limited: as first laid it held ${n(opts.rawLaidAcFt!)} ac-ft (${raw.toFixed(1)}×, above ${hi}×), so its water surface was lowered to about ${VOLUME_TARGET_RATIO}×` +
+      (outside ? `, but it still lies outside the ${lo}–${hi}× band. Check against a model run.` : `, inside the ${lo}–${hi}× band.`)
+    : !outside
       ? `${base} Inside the ${lo}–${hi}× a moving flood's max-depth envelope usually holds.`
       : ratio > hi
         ? `${base} Above ${hi}×: the layer holds far more water than the breach releases, so its extent and depths are likely too big. Check against a model run.`
