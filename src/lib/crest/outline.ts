@@ -61,7 +61,7 @@ export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300
  *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). 4 = 2026-11-03: the outline leaves out pit, pond and
  *  side-basin storage and bands on the capped depth. 5 = 2026-11-03: the volume soft limit (about 5× the release) and
  *  channel pits counted against the release. */
-export const TRACE_VERSION = 5;
+export const TRACE_VERSION = 6;
 
 /**
  * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
@@ -168,19 +168,57 @@ export function volumeLimitNote(s: Pick<OutlineStats, "volumeLimit" | "laidAcFt"
   );
 }
 
+/**
+ * Suspected crossings (Nick, 2026-11-03 22:43 CST: very large and road-crossing channel pits let the flood pass through).
+ * A channel pit is flagged when its bowl below the spill level is more than the release still left when the flood
+ * reaches it, or more than CROSSING_STORAGE_MULT × the dam's storage (when known), or when a mapped road (a road
+ * receptor with a location) lies within ROAD_CROSSING_M of it. Such a "pit" is most often the DEM's picture of a road
+ * embankment with its culvert missing, or a stock pond the flood runs through, not storage the breach must fill.
+ * CROSSING_STORAGE_MULT is Docs & QA's suggested threshold (Nick ruled only "pass through"): adjustable.
+ */
+export const CROSSING_STORAGE_MULT = 1.5;
+/** A road receptor this close (m) to a channel pit's cells marks the pit as a road crossing. */
+export const ROAD_CROSSING_M = 60;
+export type CrossingWhy = "over_remaining_release" | "over_storage" | "road";
+
+/** A flagged channel pit: where it is, its bowl, and the modest storage charged against the release for it. */
+export type CrossingPit = { atKm: number; lon: number; lat: number; pitAcFt: number; chargedAcFt: number; why: CrossingWhy[] };
+
 /** Pits the channel runs through: how many, their bowls, what the release fills, and where it runs out. */
 export type ChannelPits = {
   pits: number;
   /** Bowl storage below the spill levels of every pit the channel runs through (ac-ft). */
   storageAcFt: number;
-  /** Of that, what the release fills (ac-ft). */
+  /** Of that, what is charged against the release (ac-ft): full bowls, crossings' shallow sheets, the stop pit's share. */
   countedAcFt: number;
-  /** The pit the release runs out in: its bowl, what it holds, and its distance downstream (the flood stops there). */
-  stop?: { pitAcFt: number; heldAcFt: number; atKm: number };
+  /** The pit the release runs out in: its bowl, what it holds, and where it is (the flood stops there). */
+  stop?: { pitAcFt: number; heldAcFt: number; atKm: number; lon?: number; lat?: number; crossing?: boolean; why?: CrossingWhy[] };
+  /** Suspected crossings the flood passed through (absent when none, or on layers built before trace version 6). */
+  crossings?: CrossingPit[];
 };
 
-export type PitBowl = { z: ArrayLike<number>; spill: ArrayLike<number> };
-export type PitBudget = { storageM3: number; countedM3: number; stop: { index: number; levelM: number; pitM3: number; heldM3: number } | null };
+export type PitBowl = {
+  z: ArrayLike<number>;
+  spill: ArrayLike<number>;
+  /** The desk's flow depth (m) where the channel enters the pit: a crossing is charged its footprint at this depth. */
+  flowM?: number;
+  /** A mapped road lies at the pit. */
+  road?: boolean;
+};
+export type PitBudget = {
+  storageM3: number;
+  countedM3: number;
+  stop: { index: number; levelM: number; pitM3: number; heldM3: number; crossing: boolean; why: CrossingWhy[] } | null;
+  crossings: { index: number; pitM3: number; chargeM3: number; why: CrossingWhy[] }[];
+};
+
+/** What a crossing is charged (m³): its wetted footprint at the flow depth, no more than its bowl. */
+export function crossingChargeM3(p: PitBowl, cellM2: number): number {
+  const d = Math.max(0, p.flowM ?? 0);
+  let full = 0;
+  for (let i = 0; i < p.z.length; i++) full += Math.max(0, p.spill[i] - p.z[i]);
+  return Math.min(full, p.z.length * d) * cellM2;
+}
 
 /** Bowl volume (m³) below `level` (no higher than each cell's spill level). */
 export function bowlM3(p: PitBowl, level: number, cellM2: number): number {
@@ -192,14 +230,19 @@ export function bowlM3(p: PitBowl, level: number, cellM2: number): number {
 /**
  * Channel pits against the release (Nick, 2026-11-03). Pits the channel runs through, in channel order: each takes its
  * bowl below its spill level out of the release before the flood moves on downstream. A pit the remaining release can
- * fill counts in full (as a large release does); the first one it cannot holds what is left, at the level that volume
- * reaches (bisection), and the flood goes no further. A release of Infinity (unknown) counts every pit in full.
+ * fill counts in full (as a large release does). A suspected crossing (CROSSING_STORAGE_MULT above: a bowl bigger than
+ * the release left, or than 1.5 × the storage, or a mapped road) lets the flood pass through and is charged only its
+ * wetted footprint at the flow depth (crossingChargeM3). Only when even that is more than what is left does the
+ * release run out there, holding the rest at the level it reaches (bisection), and the flood goes no further. A
+ * release of Infinity (unknown) counts every pit in full unless it is over the storage or at a road.
  */
-export function channelPitBudget(pits: PitBowl[], releasedM3: number, cellM2: number): PitBudget {
+export function channelPitBudget(pits: PitBowl[], releasedM3: number, cellM2: number, opts: { storageM3?: number | null } = {}): PitBudget {
   let left = releasedM3;
   let storageM3 = 0;
   let countedM3 = 0;
   let stop: PitBudget["stop"] = null;
+  const crossings: PitBudget["crossings"] = [];
+  const stor = typeof opts.storageM3 === "number" && Number.isFinite(opts.storageM3) && opts.storageM3 > 0 ? opts.storageM3 : null;
   for (let i = 0; i < pits.length; i++) {
     const p = pits[i];
     let top = -Infinity;
@@ -211,9 +254,21 @@ export function channelPitBudget(pits: PitBowl[], releasedM3: number, cellM2: nu
     const full = bowlM3(p, top, cellM2);
     storageM3 += full;
     if (stop) continue;
-    if (full <= left) {
+    const why: CrossingWhy[] = [];
+    if (full > left) why.push("over_remaining_release");
+    if (stor != null && full > CROSSING_STORAGE_MULT * stor) why.push("over_storage");
+    if (p.road) why.push("road");
+    if (why.length === 0) {
       left -= full;
       countedM3 += full;
+      continue;
+    }
+    // A suspected crossing: the flood passes through, charged only its footprint at the flow depth.
+    const charge = crossingChargeM3(p, cellM2);
+    if (charge <= left) {
+      left -= charge;
+      countedM3 += charge;
+      crossings.push({ index: i, pitM3: full, chargeM3: charge, why });
       continue;
     }
     let lo = bottom;
@@ -225,9 +280,9 @@ export function channelPitBudget(pits: PitBowl[], releasedM3: number, cellM2: nu
     }
     const held = bowlM3(p, lo, cellM2);
     countedM3 += held;
-    stop = { index: i, levelM: lo, pitM3: full, heldM3: held };
+    stop = { index: i, levelM: lo, pitM3: full, heldM3: held, crossing: true, why };
   }
-  return { storageM3, countedM3, stop };
+  return { storageM3, countedM3, stop, crossings };
 }
 
 /** One line for the desk on the pits the channel runs through, or null. */
@@ -236,9 +291,22 @@ export function channelPitsNote(s: Pick<OutlineStats, "channelPits">): string | 
   if (!c) return null;
   const n = (x: number) => (x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString("en-US"));
   const head = `The channel runs through ${c.pits} pit${c.pits === 1 ? "" : "s"} holding ${n(c.storageAcFt)} ac-ft below their spill levels; they take their storage out of the release before the flood moves on downstream.`;
+  const why: Record<CrossingWhy, string> = {
+    over_remaining_release: "bigger than the release left",
+    over_storage: `over ${CROSSING_STORAGE_MULT}× the storage`,
+    road: "at a mapped road",
+  };
+  const at = (x: { atKm: number; lon?: number; lat?: number }) =>
+    `${x.atKm.toFixed(2)} km` + (typeof x.lon === "number" && typeof x.lat === "number" ? ` (${x.lat.toFixed(5)}, ${x.lon.toFixed(5)})` : "");
+  const xs = c.crossings ?? [];
+  const cross = xs.length
+    ? ` Suspected crossing${xs.length === 1 ? "" : "s"} the flood passes through, charged only ${xs.length === 1 ? "its" : "their"} footprint at the flow depth: ` +
+      xs.map((x) => `${at(x)}, ${n(x.pitAcFt)} ac-ft bowl, ${n(x.chargedAcFt)} charged (${x.why.map((w) => why[w]).join(", ")})`).join("; ") +
+      "."
+    : "";
   return c.stop
-    ? `${head} The release runs out in the pit at ${c.stop.atKm.toFixed(2)} km (it fills ${n(c.stop.heldAcFt)} of its ${n(c.stop.pitAcFt)} ac-ft), so the outline stops there.`
-    : `${head} The release fills them all (${n(c.countedAcFt)} ac-ft counted in full).`;
+    ? `${head}${cross} The release runs out in the pit at ${at(c.stop)} (it fills ${n(c.stop.heldAcFt)} of its ${n(c.stop.pitAcFt)} ac-ft), so the outline stops there` + (c.stop.crossing && c.stop.why?.length ? ` (a suspected crossing: ${c.stop.why.map((w) => why[w]).join(", ")}, but even its footprint at the flow depth is more than the release left).` : ".")
+    : `${head}${cross} The release covers them all (${n(c.countedAcFt)} ac-ft charged).`;
 }
 
 /**
@@ -327,6 +395,12 @@ export type TerrainOutline = FloodStrip & {
     volume_limit?: string;
     /** "volume-limited, run the Runner" on releases under SMALL_RELEASE_ACFT. */
     volume_label?: string;
+    /** Channel pits against the release (trace version 6 on): totals, where the release ran out, suspected crossings. */
+    channel_pits?: { pits: number; storage_ac_ft: number; counted_ac_ft: number };
+    /** Where the release ran out in a channel pit and the outline stops; null when it did not. */
+    channel_pit_stop?: { at_km: number; lon: number; lat: number; held_ac_ft: number; pit_ac_ft: number; crossing: boolean; why: CrossingWhy[] } | null;
+    /** Suspected crossings the flood passed through ([] when none). */
+    suspected_crossings?: { at_km: number; lon: number; lat: number; pit_ac_ft: number; charged_ac_ft: number; why: CrossingWhy[] }[];
   };
 };
 
@@ -469,12 +543,21 @@ export function outlineInputs(dam: DamRecord, result: Analysis): { ok: true; inp
       st: st.map((s) => [r(s.x), r(s.h), r(s.d)]),
       a: parts,
       f: r(fromM),
+      s: Number.isFinite(dam.storageAcFt) ? r(dam.storageAcFt) : null,
+      rd: roadPoints(dam).map((q) => [r(q.lon * 1e4), r(q.lat * 1e4)]),
     }),
   );
   return { ok: true, inputs: { loc, u, st, parts, fromM, lastX: st[st.length - 1].x, fingerprint } };
 }
 
 const kxOf = (lat: number) => M_PER_DEG_LON_EQ * Math.cos((lat * Math.PI) / 180);
+
+/** Mapped roads the desk knows of: road receptors with a location (Crest holds no road network). */
+export function roadPoints(dam: DamRecord): { lon: number; lat: number }[] {
+  return (dam.receptors ?? [])
+    .filter((r) => r.kind === "road" && typeof r.lon === "number" && typeof r.lat === "number" && Number.isFinite(r.lon) && Number.isFinite(r.lat))
+    .map((r) => ({ lon: r.lon!, lat: r.lat! }));
+}
 
 /** Interpolate a station value by distance downstream (clamped to the ends). */
 function interp(st: OutlineInputs["st"], x: number, key: "h" | "d"): number {
@@ -1270,14 +1353,41 @@ async function buildOutlineImpl(
     const c = pitC.lab[k];
     if (c > 0 && pitOnChannel[c]) pitCells.get(c)!.push(k);
   }
+  // Mapped roads (road receptors with a location): the channel pits within ROAD_CROSSING_M of one.
+  const roadPit = new Set<number>();
+  {
+    const rc = Math.ceil(ROAD_CROSSING_M / cellM);
+    for (const rp of roadPoints(dam)) {
+      const i0 = Math.floor((rp.lon - g.bbox[0]) / dlon);
+      const j0 = Math.floor((g.bbox[3] - rp.lat) / dlat);
+      for (let j = j0 - rc; j <= j0 + rc; j++)
+        for (let i = i0 - rc; i <= i0 + rc; i++) {
+          if (i < 0 || j < 0 || i >= W || j >= H) continue;
+          const k = j * W + i;
+          const c = pitC.lab[k];
+          if (c > 0 && pitOnChannel[c] && Math.hypot(cellX(i) - (rp.lon - loc.lon) * kx, cellY(j) - (rp.lat - loc.lat) * M_PER_DEG_LAT) <= ROAD_CROSSING_M + cellM / 2)
+            roadPit.add(c);
+        }
+    }
+  }
+  const storageM3 = Number.isFinite(dam.storageAcFt) && dam.storageAcFt > 0 ? dam.storageAcFt * ACRE_FT_M3 : null;
   const budget = channelPitBudget(
     pitOrder.map((c) => {
       const cells = pitCells.get(c)!;
-      return { z: cells.map((k) => g.z[k]), spill: cells.map((k) => fill[k]) };
+      return {
+        z: cells.map((k) => g.z[k]),
+        spill: cells.map((k) => fill[k]),
+        flowM: deskD[path[pitFirstP.get(c)!]],
+        road: roadPit.has(c),
+      };
     }),
     releasedM3,
     cellM2,
+    { storageM3 },
   );
+  /** Suspected crossings (labels): the flood passes through, its depth there no more than the flow depth. */
+  const crossingPit = new Set(budget.crossings.map((x) => pitOrder[x.index]));
+  const inCrossing = (m: number) => crossingPit.size > 0 && crossingPit.has(pitC.lab[m]);
   /** The pit the release runs out in (label), its water level (m), and the path index the flood stops at. */
   const stopPit = budget.stop ? pitOrder[budget.stop.index] : -1;
   const stopLevel = budget.stop ? budget.stop.levelM : 0;
@@ -1296,7 +1406,9 @@ async function buildOutlineImpl(
       if (inStopPit(m)) return Math.min(stopLevel, fill[m]);
       const s0 = src[m];
       const d0 = deskD[s0] * scale;
-      return Math.min(fill[s0] + d0, fill[m] + d0);
+      const w = Math.min(fill[s0] + d0, fill[m] + d0);
+      // A suspected crossing: a sheet at the flow depth over its ground, not its bowl filled to the spill level.
+      return inCrossing(m) ? Math.min(w, g.z[m] + d0) : w;
     };
     /** The floor water is measured from: the ground, or an off-channel pit's spill level. */
     const floorAt = (m: number) => (offPit(m) ? fill[m] : g.z[m]);
@@ -1416,6 +1528,7 @@ async function buildOutlineImpl(
   const pitCellsN = laid.pitCells;
   const pitM3 = laid.pitM3;
   const deepCells = deepCellsOf(depth, capFt, FT);
+  const lonLatOfCell = (k: number) => ({ lon: r7(g.bbox[0] + ((k % W) + 0.5) * dlon), lat: r7(g.bbox[3] - (Math.floor(k / W) + 0.5) * dlat) });
   const channelPits: ChannelPits | undefined = pitOrder.length
     ? {
         pits: pitOrder.length,
@@ -1427,7 +1540,24 @@ async function buildOutlineImpl(
                 pitAcFt: r3(budget.stop.pitM3 / ACRE_FT_M3),
                 heldAcFt: r3(budget.stop.heldM3 / ACRE_FT_M3),
                 atKm: r3(Math.max(0, pathA[cutP]) / 1000),
+                ...lonLatOfCell(path[cutP]),
+                crossing: budget.stop.crossing,
+                why: budget.stop.why,
               },
+            }
+          : {}),
+        ...(budget.crossings.length
+          ? {
+              crossings: budget.crossings.map((x) => {
+                const p0 = pitFirstP.get(pitOrder[x.index])!;
+                return {
+                  atKm: r3(Math.max(0, pathA[p0]) / 1000),
+                  ...lonLatOfCell(path[p0]),
+                  pitAcFt: r3(x.pitM3 / ACRE_FT_M3),
+                  chargedAcFt: r3(x.chargeM3 / ACRE_FT_M3),
+                  why: x.why,
+                };
+              }),
             }
           : {}),
       }
@@ -1563,6 +1693,30 @@ async function buildOutlineImpl(
       corridor: "up to min(max(3 × half-width, 300 m), 2000 m) from the traced channel",
       ...(volumeLimit ? { volume_limit: volumeLimitNote({ volumeLimit, laidAcFt: stats.laidAcFt }, result.breach.volumeAcFt) ?? "" } : {}),
       ...(stats.volumeLabel ? { volume_label: stats.volumeLabel } : {}),
+      ...(channelPits
+        ? {
+            channel_pits: { pits: channelPits.pits, storage_ac_ft: channelPits.storageAcFt, counted_ac_ft: channelPits.countedAcFt },
+            channel_pit_stop: channelPits.stop
+              ? {
+                  at_km: channelPits.stop.atKm,
+                  lon: channelPits.stop.lon!,
+                  lat: channelPits.stop.lat!,
+                  held_ac_ft: channelPits.stop.heldAcFt,
+                  pit_ac_ft: channelPits.stop.pitAcFt,
+                  crossing: !!channelPits.stop.crossing,
+                  why: channelPits.stop.why ?? [],
+                }
+              : null,
+            suspected_crossings: (channelPits.crossings ?? []).map((x) => ({
+              at_km: x.atKm,
+              lon: x.lon,
+              lat: x.lat,
+              pit_ac_ft: x.pitAcFt,
+              charged_ac_ft: x.chargedAcFt,
+              why: x.why,
+            })),
+          }
+        : {}),
     },
     features,
   };
