@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-11-04
+
+- **The routing reads the terrain: a Muskingum-Cunge-Todini wave in defined valleys, a frozen Muskingum-Cunge wave on
+  flat plains and tiny pools.** The frozen-coefficient Muskingum-Cunge translates a wave down a flat, wide reach about
+  right but attenuates it too little in a cut valley, where the real wave slows and flattens as it fills the overbank.
+  The variable-parameter Muskingum-Cunge-Todini scheme (Todini 2007) recomputes the celerity and width each step at the
+  local flow and captures that attenuation, but it over-damps a shallow overbank on a plain, where the celerity
+  collapses and the wave bogs. The router now chooses per reach, not per dam: a reach steeper than 0.0015 whose section
+  carries the peak within its banks routes with MCT, the rest stay on frozen MC. One dam can be confined upstream and a
+  plain downstream and gets both. The MCT coefficients are the Courant/cell-Reynolds form, which sum to one every step,
+  so the scheme conserves mass (no manufactured volume, unlike naive variable-parameter MC). Four-dam re-score against
+  LISFLOOD-FP (CSI at 0.1 ft / 1 ft): DWR-2801 0.255 / 0.191 → 0.255 / 0.192 (flat plain, held on MC), DWR-2865 0.318 /
+  0.282 → 0.327 / 0.303 (incised), DWR-3034 0.694 / 0.653 → 0.765 / 0.714 (confined), DWR-4031 0.369 / 0.159 → 0.362 /
+  0.165 (tiny pool, held on MC). The confinement trigger is insensitive from 0.0005 to 0.002 on all four dams. Saved
+  routed layers ask to be built again.
+- **The spread pours each stretch on the ground beside it, not on a stripe due north or south of it.** Each stretch of
+  the routed channel pours its water on the cells nearest it. "Nearest" was counted in grid steps (a 4-neighbour
+  search), and by that count a point off a slanting channel is equally near a long run of it: whole grid columns went
+  to one channel cell, so on the flat DWR-2801 plain the flood came out as a comb of north-south stripes up to 3 km off
+  the channel, deep where a stripe crossed a low and dry between. Nearest is now the straight-line distance. Four-dam
+  re-score against LISFLOOD-FP (CSI at 0.1 ft / 1 ft): DWR-2801 0.227 → 0.255 / 0.175 → 0.191, DWR-2865 0.295 → 0.318 /
+  0.311 → 0.282, DWR-3034 0.701 → 0.694 / 0.633 → 0.653, DWR-4031 0.354 → 0.369 / 0.101 → 0.159. Saved routed layers ask
+  to be built again.
+- **Water that tops a saddle fills the low behind it lowest ground first.** Every cell behind a saddle shares its spill
+  height; the pour laid the overflow over them in raster order (north row first) and solved its level with cells above
+  it counted at negative depth. It now fills the low from its lowest cell and holds the slice exactly.
+- **Per-dam triage: "Clearly trivial: screen only", "Uncertain: run it" or "Needs a Runner run".** Crest is the suite's
+  fast first-pass screener, never the layer of record, so each dam now gets an explicit call and a terrain confidence
+  instead of only a footprint. Needs a Runner run: a large flood (the flood-size gate), a routed layer that is
+  incomplete downstream, or anything flooded in Crest's screen. Clearly trivial: nothing flooded, on a complete footprint
+  with high confidence. Everything else is uncertain. The confidence comes from a new extent check saved with the layer
+  (`stats.extent`): how far the flood's edge moves with a foot of depth error (Crest's depth bias against the 2-D models
+  is about a foot), measured on Crest's routed spread and the DEM it was built on. High at 60 m or less (confined valley
+  or closed basin), Medium above it (open terrain: the footprint is a minimum), Low when the footprint is incomplete or
+  unchecked; the words match the published accuracy envelope. A terrain-outline dam gets the check from a routed-spread
+  probe on the same terrain (the outline stays the layer). On the four-dam baseline: DWR-3034 26 m (High; uncertain only
+  because it ends at a road-fill basin a culvert could drain), DWR-2801 127 m (Needs a Runner run, Low: large and
+  incomplete), DWR-4031 149 m and DWR-2865 158 m (Uncertain, Medium). The threshold is fit on four dams and is
+  provisional. The Flood step shows the call with its reasons, the Dashboard carries it as a flag, and
+  `scripts/triage-dams.mjs` triages a list of dam records into a CSV, Runner jobs first. Saved layers built before this
+  show "build it again for a confidence".
+
 ## 2026-11-03
 
 - **The routed flood grows its terrain downstream on demand (issue #62).** The terrain box was sized from the schematic

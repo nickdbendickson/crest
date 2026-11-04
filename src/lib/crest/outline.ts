@@ -1,6 +1,7 @@
 import { WET_FT } from "./acer.ts";
 import { downstreamDirection, readAoi, type Part, type XY } from "./aoi.ts";
 import { damLocation, ENGINE_VERSION } from "./engine.ts";
+import type { ExtentSensitivity } from "./extent.ts";
 import { bandFor, DEPTH_BANDS, floodStrip, type FloodStrip, type StripFeature } from "./floodstrip.ts";
 import type { Bbox } from "./plss.ts";
 import type { Centerline } from "./sections.ts";
@@ -58,10 +59,12 @@ const M_PER_DEG_LON_EQ = 111320;
 export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300), 2000);
 /** Bumped when the terrain request or the trace changes, so layers saved before rebuild. 2 = 2026-11-03: exact DEM
  *  box (adjustAspectRatio=false), toe start, trace margin. 3 = 2026-11-03: the routed flood's demand-driven downstream
- *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). 4 = 2026-11-03: the outline leaves out pit, pond and
- *  side-basin storage and bands on the capped depth. 5 = 2026-11-03: the volume soft limit (about 5× the release) and
- *  channel pits counted against the release. */
-export const TRACE_VERSION = 6;
+ *  reach (reach.ts) and the exhausted-stretch cap (spread.ts). 4 = 2026-11-04: the spread's ground by straight-line
+ *  nearest channel cell and the saddle pour's lowest-first tie order (spread.ts). 5 = 2026-11-04: the terrain-triggered
+ *  router — MCT on confined reaches, frozen Muskingum-Cunge on flat plains and tiny pools (routing.ts). 6 = 2026-11-04:
+ *  the outline leaves out pit, pond and side-basin storage and bands on the capped depth. 7 = 2026-11-04: the outline
+ *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. */
+export const TRACE_VERSION = 7;
 
 /**
  * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
@@ -380,6 +383,13 @@ export type OutlineStats = {
   volumeLabel?: string;
   /** Water laid down by the layer (ac-ft, from the clamped cell depths), when measured. */
   laidAcFt?: number;
+  /**
+   * How far the routed flood's edge moves with a foot of depth error (extent.ts), the terrain confidence behind the
+   * per-dam triage (triage.ts). On a routed layer it is measured on the layer itself; on a terrain outline it is
+   * measured on a routed-spread probe built on the same terrain (the outline's bathtub footprint is not what the
+   * thresholds were fit on). Absent on layers built before 2026-11-04, or when the probe could not be built.
+   */
+  extent?: ExtentSensitivity;
 };
 
 export type TerrainOutline = FloodStrip & {
