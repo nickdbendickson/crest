@@ -18,6 +18,11 @@
   only the round kept is settled. CSI vs the LISFLOOD baseline (0.1 ft / 1 ft): 2801 0.255/0.192 → 0.331/0.233,
   2865 0.327/0.303 → 0.344/0.350, 3034 0.765/0.714 → 0.840/0.765, 4031 0.362/0.165 → 0.429/0.136 (4031 at 1 ft is
   8 ac of reference). TRACE_VERSION 8. `score-routed.mjs --settle N` (0 = as poured).
+- **The terrain layer has an outline.** A dark line around the flood (Nick picked option 3 of the mock-up): the wet
+  cells closed by 30 m (gaps under about 60 m bridged), islands and holes under 5 ac left out, edges smoothed
+  (`outline.ts extentOf`). The depth bands stay the exact wet cells and lose their own thin edges. It is drawn on the
+  guided-setup, Flood and Results maps, and goes out in the terrain GeoJSON as one more feature (`kind:
+  "flood_extent"`). A layer built before this keeps its old look until it is built again.
 
 ## 2026-11-04
 
