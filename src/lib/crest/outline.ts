@@ -63,8 +63,9 @@ export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300
  *  nearest channel cell and the saddle pour's lowest-first tie order (spread.ts). 5 = 2026-11-04: the terrain-triggered
  *  router — MCT on confined reaches, frozen Muskingum-Cunge on flat plains and tiny pools (routing.ts). 6 = 2026-11-04:
  *  the outline leaves out pit, pond and side-basin storage and bands on the capped depth. 7 = 2026-11-04: the outline
- *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. */
-export const TRACE_VERSION = 7;
+ *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. 8 =
+ *  2026-11-05: the routed spread's pools settle into one sheet (spread.ts settlePools). */
+export const TRACE_VERSION = 8;
 
 /**
  * The depth cap is the dam height itself (Nick, 2026-11-03: no margin). A breach cannot stand water deeper than the dam
