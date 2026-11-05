@@ -46,13 +46,12 @@ describe("volume soft limit: about 5× the release (Nick, 2026-11-03)", () => {
   it("the target and the trigger are 5× and 6×, and saved layers rebuild (trace version 6)", () => {
     assert.equal(VOLUME_TARGET_RATIO, 5);
     assert.equal(VOLUME_SHRINK_ABOVE, 6);
-    assert.equal(TRACE_VERSION, 6);
+    assert.equal(TRACE_VERSION, 7);
   });
 
   it("the outline GeoJSON carries the trace version it was built with", async () => {
     const { outline } = await build(ND);
     assert.equal(outline.properties.trace_version, TRACE_VERSION);
-    assert.equal(outline.properties.trace_version, 6);
   });
 
   it("inside the band (2.4× on the full ND00199 release) the outline is left as the desk lays it", async () => {
