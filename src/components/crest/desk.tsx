@@ -75,6 +75,8 @@ import { ViewExport } from "./ViewExport";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
 const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
+// The batch screen loads the structure lists (about 2 MB), so it is its own chunk, fetched only when opened.
+const BatchScreen = lazy(() => import("./BatchScreen").then((m) => ({ default: m.BatchScreen })));
 
 const LEVEL_CLASS: Record<ScreenLevel, string> = {
   High: "bg-amber text-card",
@@ -94,6 +96,7 @@ export function Desk() {
   const restore = useDesk((s) => s.restore);
   const addDam = useDesk((s) => s.addDam);
   const [ready, setReady] = useState(false);
+  const [view, setView] = useState<"desk" | "batch">("desk");
 
   useEffect(() => {
     void useDesk.persist.rehydrate();
@@ -121,9 +124,29 @@ export function Desk() {
             A standalone stand-in for the QGIS suite. Elevations, breach, and the map update as you edit.
             It does not run LISFLOOD, ANUGA, or HEC-RAS, and it does not assign an official hazard class.
           </p>
+          <div className="flex gap-2 sm:ml-auto" role="group" aria-label="View">
+            {(["desk", "batch"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={view === v}
+                onClick={() => setView(v)}
+                className={"h-11 rounded-sm border px-4 text-sm " + (view === v ? "border-water bg-water text-card" : "border-line bg-card text-ink")}
+              >
+                {v === "desk" ? "One dam" : "Batch"}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
+      {view === "batch" ? (
+        <main className="mx-auto w-full max-w-6xl min-w-0 px-4 py-4">
+          <Suspense fallback={<p className="text-sm text-muted">Opening the batch screen…</p>}>
+            <BatchScreen onOpen={() => setView("desk")} />
+          </Suspense>
+        </main>
+      ) : (
       <div className="mx-auto grid w-full max-w-6xl min-w-0 gap-0 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0 border-b border-line bg-card lg:border-r lg:border-b-0">
           <div className="flex items-center justify-between px-4 pt-4">
@@ -226,6 +249,7 @@ export function Desk() {
           <AboutData />
         </main>
       </div>
+      )}
       <footer className="border-t border-line bg-card">
         <div className="mx-auto max-w-6xl px-4 py-3 text-xs text-muted">
           <details>

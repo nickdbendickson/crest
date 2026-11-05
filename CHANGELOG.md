@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-05
+
+- **Batch screen: many structures at once, including every DWR dam and the DWR dugouts.** A new **Batch** view picks
+  structures one by one, by county, by HUC8 watershed or statewide, from the NID main dams (948), the DWR Dams layer
+  (8,955 more, all statuses but Removed / Not Built) and the DWR Dugouts layer (1,766), and runs each through the
+  desk's own breach, inundation layer, 911 lookup and triage with an auto-derived record (crest from DWR NAVD 88 or
+  3DEP at the point, direction from the 3DEP downhill). Results sort as a Runner worklist with a CSV and Open in desk.
+  `npm run batch:dams` does the same from the command line, resumable, and reads a local DEM mosaic with `--dem`.
+  New bundle `nd_structures.json` (`npm run data:nd-structures`). Unknown Structures are not included yet: that DWR
+  layer is not on the DWR map service.
+
 ## 2026-11-04
 
 - **The web app renders on the server without crashing, and hydrates without tearing the page down.** Crest is a
