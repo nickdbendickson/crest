@@ -23,6 +23,22 @@
   (`outline.ts extentOf`). The depth bands stay the exact wet cells and lose their own thin edges. It is drawn on the
   guided-setup, Flood and Results maps, and goes out in the terrain GeoJSON as one more feature (`kind:
   "flood_extent"`). A layer built before this keeps its old look until it is built again.
+- **Batch screen: many structures at once, including every DWR dam and the DWR dugouts.** A new **Batch** view picks
+  structures one by one, by county, by HUC8 watershed or statewide, from the NID main dams (948), the DWR Dams layer
+  (8,955 more, all statuses but Removed / Not Built) and the DWR Dugouts layer (1,766), and runs each through the
+  desk's own breach, inundation layer, 911 lookup and triage with an auto-derived record (crest from DWR NAVD 88 or
+  3DEP at the point, direction from the 3DEP downhill). Results sort as a Runner worklist with a CSV and Open in desk.
+  `npm run batch:dams` does the same from the command line, resumable, and reads a local DEM mosaic with `--dem`.
+  New bundle `nd_structures.json` (`npm run data:nd-structures`).
+- **DWR Unknown Structures in the batch and the DWR fill.** From Nick's DWR export (not on the map service). Most
+  (3,611 of 3,770) are already DWR Dams records under a new number, or NID dams: their UNK- number is now an alias that
+  finds that record (UNK-2400 is DWR-16431). The other 144 are listed as "DWR unknown structure", status Unknown
+  (on by default).
+- **Local DEM, DWR fill, map location and breach point on the desk.** The desktop app can use a local DEM file (e.g.
+  the statewide 1 m VRT) for all terrain instead of 3DEP, chosen in a file dialog and remembered. The Record step can
+  make a new record from any DWR dam or dugout, and a new dam's latitude and longitude can be set by clicking the map.
+  The Flood step picks the breach point automatically (lowest downstream toe along the dam line) or by a click on the
+  map, and the reservoir point by a click.
 
 ## 2026-11-04
 
