@@ -148,6 +148,22 @@ layer the flood-size gate picks, the 911 address points inside it (with 3DEP pad
   (about 1.5 s a small dam instead of 7 s), and the crest is read on a 2 m grid, so it lands on the embankment top.
   The VRT must be in metres (`--dem-feet` for a feet DEM); mosaic gaps are NoData. The 911 address points still come
   from the ND GIS Hub.
+- **Local DEM in the desktop app:** under **Terrain** (Batch screen and the Flood step), *Use a local DEM file (.vrt,
+  .tif)…* opens a file dialog; pick e.g. `ND_1m_EPSG26914.vrt`. The choice is saved (`crest-settings.json`,
+  `dem_path`) and every terrain read on the desk then comes from it through `gdalwarp`, a window around each dam only
+  (`GET /api/dem`, `crest-desktop/crest/localdem.py`): the inundation layer, the batch, the breach point and the crest
+  read at a new dam. *Back to USGS 3DEP* undoes it. A web page cannot open a file by path, so the web desk stays on 3DEP.
+
+**Dam record helpers.**
+
+- **Fill from DWR dams, dugouts** (Record step, under the NID picker): search any DWR dam or dugout by number, county or
+  watershed and make a new record from it, the way the batch screen does (height, storage, area and length from DWR;
+  crest from the terrain at the point; dam line, reservoir and breach point from the terrain).
+- **Pick the dam's location on the map** (Record step): click the embankment to set latitude and longitude for a new
+  dam; *Read the ground here* sets the DEM crest from the highest ground within 30 m of the point.
+- **Breach point** (Flood step): *Pick breach point automatically* puts it where the ground at the downstream toe is
+  lowest along the dam line (the old channel crossing; a dam line and reservoir point are laid from the terrain when
+  missing, `src/lib/crest/breach-point.ts`), or *Click to place breach point* / *reservoir point* and click the map.
 
 **Data.** `src/lib/crest/data/nd_structures.json` holds every DWR Dams record that is not an NID main dam (the NID entry
 stands for it) and every DWR Dugouts record, keyed `DWR-<structure>` / `DUG-<structure>`, except status Removed / Not
