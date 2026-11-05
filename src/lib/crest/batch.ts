@@ -32,7 +32,7 @@ import {
   storageFor,
   type NdData,
 } from "./nd-dams.ts";
-import { demRequest, fetchDem, lookupArea, outlineInputs, outlineState, type DemGrid, type DemRequest } from "./outline.ts";
+import { demRequest, demSourceLabel, fetchDem, lookupArea, outlineInputs, outlineState, type DemGrid, type DemRequest } from "./outline.ts";
 import { blankDam } from "./samples.ts";
 import { RECOMMENDATION_LABEL, RECOMMENDATION_ORDER, triageDam, type Triage } from "./triage.ts";
 import type { DamRecord, GeoJSONFeature, Provenance, ScreenLevel } from "./types.ts";
@@ -261,24 +261,13 @@ export function synthGeometry(lon: number, lat: number, u: [number, number], len
 }
 
 /**
- * The desk record for a structure: the NID dam's own prefill (same as "New record from NID"), or the DWR numbers,
- * with the crest, streambed and geometry derived as the module note says. Null + reason when it cannot be built.
+ * The record's inventory fields for a structure, elevations left blank (as the NID picker leaves them): the NID dam's
+ * own prefill ("New record from NID"), or the DWR numbers with "DWR" provenance. Used by the Record step's "New record
+ * from DWR" (then the crest comes from the terrain) and by deriveRecord.
  */
-export function deriveRecord(
-  s: Structure,
-  g: DemGrid,
-  nd?: Pick<NdData, "byNid" | "dwr" | "nidSource" | "dwrSource">,
-  demLabel: Exclude<CrestFrom, "DWR"> = "3DEP",
-): { ok: true; dam: DamRecord; derived: Derived } | { ok: false; reason: string } {
-  const miss = missingData(s);
-  if (miss) return { ok: false, reason: miss };
-  const lon = s.lon!;
-  const lat = s.lat!;
-  const d = deriveFromDem(g, lon, lat);
-  if (!d) return { ok: false, reason: "No 3DEP terrain at the structure's point." };
+export function structureRecord(s: Structure, nd?: Pick<NdData, "byNid" | "dwr" | "nidSource" | "dwrSource">, id = `batch-${s.id.toLowerCase()}`): DamRecord {
   const asOf = new Date().toISOString().slice(0, 10);
   const base = blankDam();
-  const id = `batch-${s.id.toLowerCase()}`;
   let dam: DamRecord;
   const ndDam = s.kind === "nid" ? nd?.byNid.get(s.id) : undefined;
   if (ndDam && nd) {
@@ -303,14 +292,19 @@ export function deriveRecord(
       nid: s.id,
       county: s.county ?? "",
       year: s.year ?? Number.NaN,
-      heightFt: s.heightFt!,
+      heightFt: s.heightFt ?? Number.NaN,
       lengthFt: s.lengthFt ?? Number.NaN,
-      storageAcFt: s.storageAcFt!,
+      storageAcFt: s.storageAcFt ?? Number.NaN,
       drainageMi2: Number.NaN,
       spillwayFt: Number.NaN,
       normalPoolFt: Number.NaN,
-      lat,
-      lon,
+      lat: s.lat ?? undefined,
+      lon: s.lon ?? undefined,
+      crestFt: Number.NaN,
+      streambedFt: Number.NaN,
+      demCrestFt: Number.NaN,
+      statedDatum: "",
+      geometry: undefined,
       receptors: [],
       receptorSource: "nd911",
       judgmentAsProbable: false,
@@ -318,6 +312,27 @@ export function deriveRecord(
     };
   }
   if (s.areaAc != null && dam.surfaceAreaAc == null) dam.surfaceAreaAc = s.areaAc;
+  return dam;
+}
+
+/**
+ * The desk record for a structure: the NID dam's own prefill (same as "New record from NID"), or the DWR numbers,
+ * with the crest, streambed and geometry derived as the module note says. Null + reason when it cannot be built.
+ */
+export function deriveRecord(
+  s: Structure,
+  g: DemGrid,
+  nd?: Pick<NdData, "byNid" | "dwr" | "nidSource" | "dwrSource">,
+  demLabel: Exclude<CrestFrom, "DWR"> = "3DEP",
+): { ok: true; dam: DamRecord; derived: Derived } | { ok: false; reason: string } {
+  const miss = missingData(s);
+  if (miss) return { ok: false, reason: miss };
+  const lon = s.lon!;
+  const lat = s.lat!;
+  const d = deriveFromDem(g, lon, lat);
+  if (!d) return { ok: false, reason: "No 3DEP terrain at the structure's point." };
+  const asOf = new Date().toISOString().slice(0, 10);
+  let dam = structureRecord(s, nd);
 
   // Crest: DWR NAVD 88 where the bundle offers it, else 3DEP near the point.
   const dwr = nd?.dwr.get(s.id);
@@ -444,8 +459,10 @@ export async function runStructure(s: Structure, deps: BatchDeps = {}): Promise<
   const dem = deps.fetchDem ?? ((r: DemRequest) => fetchDem(r));
   try {
     deps.onStatus?.(`${s.id}: reading the terrain at the point…`);
-    const near = await dem(nearRequest(s.lon!, s.lat!, 0.6, deps.nearCellM ?? 10));
-    const rec = deriveRecord(s, near, deps.nd, deps.demLabel);
+    // The desktop's local DEM (dem-source.ts) answers fetchDem when no fetch is passed: read it at 2 m, label it.
+    const local = !deps.fetchDem && demSourceLabel() !== "3DEP";
+    const near = await dem(nearRequest(s.lon!, s.lat!, 0.6, deps.nearCellM ?? (local ? 2 : 10)));
+    const rec = deriveRecord(s, near, deps.nd, deps.demLabel ?? (local ? "local DEM" : "3DEP"));
     if (!rec.ok) return { row: emptyRow(s, "needs-data", rec.reason, secs()), dam: null };
     let dam = rec.dam;
     let result = analyze(dam);

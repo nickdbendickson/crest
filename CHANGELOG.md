@@ -10,6 +10,11 @@
   `npm run batch:dams` does the same from the command line, resumable, and reads a local DEM mosaic with `--dem`.
   New bundle `nd_structures.json` (`npm run data:nd-structures`). Unknown Structures are not included yet: that DWR
   layer is not on the DWR map service.
+- **Local DEM, DWR fill, map location and breach point on the desk.** The desktop app can use a local DEM file (e.g.
+  the statewide 1 m VRT) for all terrain instead of 3DEP, chosen in a file dialog and remembered. The Record step can
+  make a new record from any DWR dam or dugout, and a new dam's latitude and longitude can be set by clicking the map.
+  The Flood step picks the breach point automatically (lowest downstream toe along the dam line) or by a click on the
+  map, and the reservoir point by a click.
 
 ## 2026-11-04
 

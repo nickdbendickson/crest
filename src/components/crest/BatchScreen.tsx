@@ -29,6 +29,7 @@ import { fold, type NdData } from "@/lib/crest/nd-dams";
 import { saveText } from "@/lib/crest/save";
 import { useDesk } from "@/lib/crest/store";
 import type { DamRecord } from "@/lib/crest/types";
+import { TerrainSource } from "./TerrainSource";
 
 const ROWS_KEY = "crest-batch-v1";
 const btn = "inline-flex h-11 items-center rounded-sm border border-line bg-card px-4 text-sm text-ink disabled:opacity-50";
@@ -183,8 +184,9 @@ export function BatchScreen({ onOpen }: { onOpen: () => void }) {
         <p className="mt-1 text-sm text-muted">
           Run many structures through the same build and triage as one dam on the desk. Each record is auto-derived: height and
           storage from the inventory, crest from DWR NAVD 88 where offered or else from 3DEP at the point, and the downstream
-          direction from the 3DEP downhill. Use the results to order the Runner worklist.
+          direction from the 3DEP downhill (or from the local DEM chosen below). Use the results to order the Runner worklist.
         </p>
+        <TerrainSource />
 
         <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Select by">
           {BY.map((b) => (
