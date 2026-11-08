@@ -391,6 +391,8 @@ export type OutlineStats = {
    * thresholds were fit on). Absent on layers built before 2026-11-04, or when the probe could not be built.
    */
   extent?: ExtentSensitivity;
+  /** Why there is no extent check: the routed-spread probe failed with this message (inundation.ts probeExtent). */
+  extentError?: string;
 };
 
 /** The layer's outer boundary as drawn (extentOf): one dark line around the flood, for the map and the GeoJSON export. */
@@ -559,6 +561,8 @@ export function outlineInputs(dam: DamRecord, result: Analysis): { ok: true; inp
     fromM = aoi.nearKm * 1000;
   }
   const r = (n: number) => Math.round(n * 1000) / 1000;
+  // The fingerprint mixes in the two METHOD versions (the engine's numerics and the terrain trace), never the build
+  // version (version.ts): a rebuild that changes no method must not ask every saved layer to be built again.
   const fingerprint = fnv(
     JSON.stringify({
       v: ENGINE_VERSION,
