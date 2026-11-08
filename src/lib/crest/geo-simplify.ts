@@ -111,10 +111,17 @@ export function vertexCount(geom: Geometry): number {
  * nothing is simplified (the tolerance is smaller than the cell edges the rings follow).
  */
 export function simplifyForDisplay<T extends FloodStrip>(fc: T, zoom: number, pixels = 0.5): T {
-  const lat = fc.features[0]?.geometry.type === "Polygon" ? (fc.features[0].geometry.coordinates[0]?.[0]?.[1] as number | undefined) : (fc.features[0]?.geometry.coordinates[0]?.[0]?.[0]?.[1] as number | undefined);
-  const tolM = metresPerPixel(zoom, lat ?? 47) * pixels;
+  const tolM = metresPerPixel(zoom, firstLat(fc) ?? 47) * pixels;
   if (tolM < SIMPLIFY_FROM_M) return fc;
   return { ...fc, features: fc.features.map((f) => ({ ...f, geometry: simplifyGeometry(f.geometry, tolM) })) };
+}
+
+/** Latitude of the first vertex of the first band, for the pixel scale; undefined on an empty collection. */
+function firstLat(fc: FloodStrip): number | undefined {
+  const g = fc.features[0]?.geometry;
+  if (!g) return undefined;
+  const ring: number[][] | undefined = g.type === "Polygon" ? g.coordinates[0] : g.coordinates[0]?.[0];
+  return ring?.[0]?.[1];
 }
 
 /** Tolerances under this (m) are not worth a pass: the rings follow 10 m cell edges smoothed by half a cell. */
