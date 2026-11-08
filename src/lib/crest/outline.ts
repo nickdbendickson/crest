@@ -64,7 +64,11 @@ export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300
  *  router — MCT on confined reaches, frozen Muskingum-Cunge on flat plains and tiny pools (routing.ts). 6 = 2026-11-04:
  *  the outline leaves out pit, pond and side-basin storage and bands on the capped depth. 7 = 2026-11-04: the outline
  *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. 8 =
- *  2026-11-05: the routed spread's pools settle into one sheet (spread.ts settlePools). */
+ *  2026-11-05: the routed spread's pools settle into one sheet (spread.ts settlePools).
+ *
+ *  This is also the SPREAD METHOD version the published accuracy envelope is scored on: docs/accuracy-envelope.md
+ *  carries "Scored on trace-version N", and outline.test.ts fails with "re-score the envelope" when N differs from
+ *  this, so a bump here lands with a re-score of the four baselines in the same PR. */
 export const TRACE_VERSION = 8;
 
 /**
