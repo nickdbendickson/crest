@@ -42,6 +42,7 @@
  *   still rests on a model run or an engineer.
  * - High confidence is not a Runner result. It means Crest is a fair screen there, not that it is right.
  */
+import { csvCell } from "./csv.ts";
 import type { ExtentSensitivity } from "./extent.ts";
 import { GATE_VOLUME_ACFT, VOLUME_RATIO_BAND } from "./inundation.ts";
 import type { OutlineState } from "./outline.ts";
@@ -143,7 +144,9 @@ export function triageDam(dam: DamRecord, result: Analysis, outline: OutlineStat
   const hard: string[] = [];
   const soft: string[] = [];
   if (!ready) soft.push("No terrain layer is built yet, so there is no footprint to judge: build the inundation layer to triage this dam.");
-  else if (!ext) soft.push("The saved terrain layer has no extent check (built before it, or the routed probe could not be built): build it again for a confidence.");
+  else if (!ext && ready.stats.extentError)
+    soft.push(`The saved terrain layer has no extent check: the routed-spread probe failed (${ready.stats.extentError.replace(/\.$/, "")}). Check the dam point and the crest, then build it again for a confidence.`);
+  else if (!ext) soft.push("The saved terrain layer has no extent check (built before it): build it again for a confidence.");
   else soft.push(extentLine(ext));
 
   if (ready?.routed?.reach?.incomplete)
