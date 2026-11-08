@@ -3,13 +3,12 @@
  *
  * Web and desktop builds: a dynamic `import()` of the JSON, which Vite keeps as its own chunk (vite.desktop.config.ts
  * keeps them out of the first parse), exactly as before. The one-file Crest.html cannot have a separate chunk, and
- * with every chunk flattened into it the 1.64 MB structures table was parsed on every open of the page, Batch view or
- * not. There the build packs each bundle as gzip + base64 (about 290 KB for the structures) into a `packed` table
- * (the singlefile plugin's virtual module), and this inflates one with DecompressionStream the first time it is asked
- * for. A browser without DecompressionStream (none current; Safari has it since 16.4) gets the plain JSON, which the
- * plugin still inlines as the fallback.
+ * with every chunk flattened into it the 1.64 MB structures table rode along in the page's one script. There the
+ * build packs each bundle as gzip + base64 (about 450 KB for all three) into data/packed.ts and leaves the JSON
+ * modules out; this inflates one with DecompressionStream the first time it is asked for, or with fflate's gunzip
+ * (already a dependency, for the results import) in a browser without that API.
  *
- * Node (the tests, the batch command line) and Vite dev have no `packed` table and take the JSON import.
+ * Node (the tests, the batch command line) and Vite dev have an empty `packed` table and take the JSON import.
  */
 
 export type BundleName = "nd_dams" | "nd_dams_dwr" | "nd_structures";
@@ -26,19 +25,31 @@ function packed(): Promise<Packed> {
   return packedTable;
 }
 
-/** Inflate a gzip + base64 string to text with DecompressionStream; null where the API is missing or inflation fails. */
-export async function inflateBase64Gzip(b64: string): Promise<string | null> {
+/** The bytes of a base64 string. */
+export function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * Inflate a gzip + base64 string to text: DecompressionStream where the browser has it (every current one; Safari
+ * since 16.4), else fflate's gunzip, loaded on demand. Throws on a corrupt payload.
+ */
+export async function inflateBase64Gzip(b64: string, useStream = true): Promise<string> {
+  const bytes = base64ToBytes(b64);
   const DS = (globalThis as { DecompressionStream?: typeof DecompressionStream }).DecompressionStream;
-  if (typeof DS !== "function" || typeof Response !== "function") return null;
-  try {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const stream = new Blob([bytes]).stream().pipeThrough(new DS("gzip"));
-    return await new Response(stream).text();
-  } catch {
-    return null;
+  if (useStream && typeof DS === "function" && typeof Response === "function") {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new DS("gzip"));
+      return await new Response(stream).text();
+    } catch {
+      // Fall through to fflate: a stream that fails mid-way (an old implementation) should not lose the bundle.
+    }
   }
+  const { gunzipSync, strFromU8 } = await import("fflate");
+  return strFromU8(gunzipSync(bytes));
 }
 
 const loaders: Record<BundleName, () => Promise<unknown>> = {
@@ -63,12 +74,13 @@ export function loadBundle<T>(name: BundleName): Promise<T> {
     p = (async () => {
       const table = await packed();
       const b64 = table[name];
-      if (b64) {
-        const text = await inflateBase64Gzip(b64);
-        if (text != null) return JSON.parse(text) as unknown;
-      }
+      if (b64) return JSON.parse(await inflateBase64Gzip(b64)) as unknown;
       const m = await loaders[name]();
-      return (m as { default?: unknown }).default ?? m;
+      const data = (m as { default?: unknown }).default ?? m;
+      // The single-file build leaves the JSON modules out (vite.desktop.config.ts packedDataPlugin), so a missing
+      // packed entry there is a build fault, not a missing file.
+      if (data == null) throw new Error(`The ${name} bundle is not in this build.`);
+      return data;
     })();
     cache.set(name, p);
   }

@@ -28,9 +28,10 @@
   typed-array copy instead of a DataView call per cell. The 30 m and 10 m ND00199 builds are bit-identical to before.
 - **`Crest.html` no longer parses the structure tables on open.** The three data bundles (2.2 MB of JSON, 1.64 MB of
   it the batch's structure list) were flattened into the single file's one script and parsed on every open. They are
-  now packed gzip + base64 (about 450 KB) and inflated with `DecompressionStream` the first time the picker or the
-  Batch view asks (falling back to the plain JSON where that API is missing); the web and desktop builds keep them and
-  `geotiff` as their own lazy chunks (`vite.desktop.config.ts`). Rebuild the desktop bundle and `Crest.html`.
+  now packed gzip + base64 (about 450 KB; the file is about 1.7 MB smaller) and inflated with `DecompressionStream`
+  the first time the picker or the Batch view asks (with fflate's gunzip where a browser lacks that API); the web and
+  desktop builds keep them and `geotiff` as their own lazy chunks (`vite.desktop.config.ts`). Rebuild the desktop
+  bundle and `Crest.html`.
 
 ## 2026-11-07
 

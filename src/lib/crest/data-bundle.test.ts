@@ -12,8 +12,8 @@ describe("data-bundle", () => {
     assert.equal(await inflateBase64Gzip(b64), text);
   });
 
-  it("answers null for a bad payload (the caller then takes the JSON module)", async () => {
-    assert.equal(await inflateBase64Gzip("not base64 at all!!"), null);
+  it("throws on a corrupt payload rather than handing back nothing", async () => {
+    await assert.rejects(inflateBase64Gzip("not base64 at all!!"));
   });
 
   it("loads the committed structures bundle once, from its JSON module (no packed table in Node)", async () => {
