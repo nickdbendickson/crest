@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import type { Plugin } from "vite";
 import { defineConfig } from "vite";
 import viteReact from "@vitejs/plugin-react";
@@ -55,6 +56,34 @@ function buildInfo(moduleIds: Iterable<string>, builtBy = "npm run build:desktop
   const sorted = Object.fromEntries(Object.entries(sources).sort(([a], [b]) => a.localeCompare(b)));
   const pkg = JSON.parse(readFileSync(r("./package.json"), "utf8")) as { name?: string };
   return JSON.stringify({ app: pkg.name ?? "crest", builtBy, sources: sorted }, null, 2) + "\n";
+}
+
+/**
+ * The three data bundles (2.2 MB of JSON) inside the one-file Crest.html: gzip + base64 (about 450 KB) instead of the
+ * JSON flattened into the page's one script, so opening the desk no longer parses the 1.64 MB structures table the
+ * Batch view alone needs. src/lib/crest/data/packed.ts is the empty stand-in every other build sees; here it is
+ * replaced by a module whose default export carries each bundle packed, and data-bundle.ts inflates one with
+ * DecompressionStream on first use. The JSON modules stay in the bundle as the fallback for a browser without
+ * DecompressionStream (data-bundle.ts falls back to them), so the page still carries the plain copies: the saving
+ * is in parse time at load, not in the file's size. Dropping the fallback would save ~2 MB of the file; left in
+ * until the maintainer confirms the fleet's browsers (Safari ≥ 16.4, Chrome ≥ 80, Firefox ≥ 113 have it).
+ */
+const PACKED_BUNDLES = ["nd_dams", "nd_dams_dwr", "nd_structures"] as const;
+function packedDataPlugin(): Plugin {
+  const stub = r("./src/lib/crest/data/packed.ts");
+  return {
+    name: "crest-desktop:packed-data",
+    apply: "build",
+    enforce: "pre",
+    load(id) {
+      if (id.split("?")[0] !== stub) return null;
+      const entries = PACKED_BUNDLES.map((name) => {
+        const json = readFileSync(r(`./src/lib/crest/data/${name}.json`), "utf8");
+        return `  ${name}: ${JSON.stringify(gzipSync(Buffer.from(json, "utf8"), { level: 9 }).toString("base64"))},`;
+      });
+      return `const packed = {\n${entries.join("\n")}\n};\nexport default packed;\n`;
+    },
+  };
 }
 
 /** Inline the one JS chunk and the CSS into the HTML and emit it as Crest.html (what vite-plugin-singlefile does). */
@@ -119,6 +148,18 @@ const desktop = defineConfig({
         entryFileNames: "assets/[name].js",
         chunkFileNames: (chunk) => (chunk.isDynamicEntry ? "assets/[name].js" : "assets/samples.js"),
         assetFileNames: "assets/[name][extname]",
+        // The data bundles (nd_dams, nd_dams_dwr, nd_structures: 2.2 MB) and geotiff stay their own chunks, loaded
+        // only when the picker, the Batch view or a results import asks for them, whatever else shares a module with
+        // them. Rolldown's `codeSplitting.groups` is the manualChunks of Vite 8 (Rollup's manualChunks is deprecated
+        // there); the test is on the module id. `priority` puts a data module in its group before the default
+        // sharing rules could fold it into the desk chunk.
+        codeSplitting: {
+          groups: [
+            { name: "nd_structures", test: /\/src\/lib\/crest\/data\/nd_structures\.json/, priority: 30 },
+            { name: "nd_dams", test: /\/src\/lib\/crest\/data\/nd_dams(_dwr)?\.json/, priority: 30 },
+            { name: "geotiff", test: /\/node_modules\/geotiff\//, priority: 20 },
+          ],
+        },
       },
     },
   },
@@ -127,7 +168,7 @@ const desktop = defineConfig({
 /** Crest.html: the desk alone (no engine facade), everything in one file. */
 const singleFile = defineConfig({
   ...desktop,
-  plugins: [tailwindcss(), viteReact(), singleFilePlugin()],
+  plugins: [packedDataPlugin(), tailwindcss(), viteReact(), singleFilePlugin()],
   build: {
     outDir: r("./node_modules/.cache/crest-html"), // stays empty: the plugin writes Crest.html at the repo root
     emptyOutDir: true,
