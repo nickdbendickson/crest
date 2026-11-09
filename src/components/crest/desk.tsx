@@ -1,7 +1,9 @@
-import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, type ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChevronLeft, ChevronRight, Droplets, Plus, RotateCcw } from "lucide-react";
-import { analyze, crestNavdLabel, STEPS } from "@/lib/crest/engine";
-import { lookupPads, padPoints } from "@/lib/crest/nd911-pads";
+import { analyze, crestNavdLabel, INPUT_RANGE, inputRangeWarning, STEPS } from "@/lib/crest/engine";
+import { datumFlags, floodFlags, warningKey, type Warning } from "@/lib/crest/warnings";
+import { locationProblem } from "@/lib/crest/guided";
+import { lookupPads, padPoints, padsToRetry, resetFailedPads } from "@/lib/crest/nd911-pads";
 import { exportDamJson, exportHydrographCsv, generateLisfloodPackage } from "@/lib/crest/export";
 import { floodStrip, type FloodStrip } from "@/lib/crest/floodstrip";
 import {
@@ -47,12 +49,14 @@ import {
   outlineState,
   type OutlineState,
 } from "@/lib/crest/outline";
-import { buildInundationReach, ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
+import { ROUTED_LABEL, volumeCheck } from "@/lib/crest/inundation";
+import { buildInundationInWorker, CANCELLED } from "@/lib/crest/inundation-client";
 import { layerOfRecord } from "@/lib/crest/layer-of-record";
 import { CONFIDENCE_LABEL, triageDam } from "@/lib/crest/triage";
 import { num } from "@/lib/crest/format";
 import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
+import { onOutlineSaveChange, outlineSaveError } from "@/lib/crest/outline-store";
 import { activeDam, hydrateDesk, useDesk, useSaveStatus } from "@/lib/crest/store";
 import type {
   BreachMethod,
@@ -66,7 +70,7 @@ import type {
 } from "@/lib/crest/types";
 import { HydroChart, ValleyMap } from "./charts";
 import { useOnline } from "./use-online";
-import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel } from "./NdDamPicker";
+import { AboutData, FieldTag, NdDamPicker, NidHazardLine, NidRecordPanel, useNdData } from "./NdDamPicker";
 import { ResultsStep } from "./ResultsStep";
 import { useAnalysisOfRecord, useResultsSync, useStripOfRecord } from "./results-flow";
 import { PaperReport } from "./PaperReport";
@@ -93,6 +97,46 @@ const LEVEL_CLASS: Record<ScreenLevel, string> = {
   Low: "bg-ink text-card",
   Review: "bg-sand text-ink",
 };
+/** A non-colour mark beside the screen level, so the badge reads in grayscale and to a screen reader: a glyph and the
+ * level's first letter in a bordered box, the way the paper report's stamp carries its word. */
+const LEVEL_MARK: Record<ScreenLevel, { glyph: string; title: string }> = {
+  High: { glyph: "▲ H", title: "High: probable loss of life" },
+  Medium: { glyph: "■ M", title: "Medium: economic loss, no probable loss of life" },
+  Low: { glyph: "● L", title: "Low" },
+  Review: { glyph: "? R", title: "Review: the screen is held" },
+};
+
+/** The screen level as a badge: colour plus a glyph-and-letter mark and an aria-label, never colour alone. */
+function LevelBadge({ level, label }: { level: ScreenLevel; label: string }) {
+  const m = LEVEL_MARK[level];
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-sm px-3 py-1 text-lg ${LEVEL_CLASS[level]}`} aria-label={`${label}. ${m.title}`} data-level={level}>
+      <span className="rounded-sm border border-current px-1 text-xs font-semibold tracking-wide" aria-hidden="true">
+        {m.glyph}
+      </span>
+      {label}
+    </span>
+  );
+}
+
+/** A review flag with its catalogue code (warnings.ts) in front, keyed by code and position, never by its text. */
+function FlagList({ flags, className, testId }: { flags: Warning[]; className: string; testId?: string }) {
+  return (
+    <ul className={className} data-testid={testId}>
+      {flags.map((w, i) => (
+        <li key={warningKey(w, i)}>
+          <code
+            className="mr-1 rounded-sm border border-current/40 px-1 align-middle text-[0.7rem]"
+            title={w.severity === "stop" ? "Holds the screen at Review" : w.severity === "warn" ? "Check before relying on the result" : "For information"}
+          >
+            {w.code}
+          </code>
+          {w.text}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function Desk() {
   const dams = useDesk((s) => s.dams);
@@ -106,6 +150,8 @@ export function Desk() {
   const addDam = useDesk((s) => s.addDam);
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<"desk" | "batch">("desk");
+  // What "Open in desk" did (selected an existing record or added one), shown once over the desk.
+  const [openNote, setOpenNote] = useState<string | null>(null);
   const saveBlocked = useSaveStatus((s) => s.blocked);
   const staleTab = useSaveStatus((s) => s.stale);
 
@@ -167,7 +213,12 @@ export function Desk() {
       {view === "batch" ? (
         <main className="mx-auto w-full max-w-6xl min-w-0 px-4 py-4">
           <Suspense fallback={<p className="text-sm text-muted">Opening the batch screen…</p>}>
-            <BatchScreen onOpen={() => setView("desk")} />
+            <BatchScreen
+              onOpen={(note) => {
+                setOpenNote(note ?? null);
+                setView("desk");
+              }}
+            />
           </Suspense>
         </main>
       ) : (
@@ -218,6 +269,14 @@ export function Desk() {
 
         <main className="min-w-0 px-4 py-4">
           {!ready ? <p className="text-sm text-muted">Opening the desk…</p> : null}
+          {openNote ? (
+            <p className="mb-3 flex items-start gap-2 rounded-sm border border-line bg-sand px-3 py-2 text-sm" role="status" data-testid="open-in-desk-note">
+              <span className="min-w-0 flex-1">{openNote}</span>
+              <button type="button" className="shrink-0 text-muted underline" onClick={() => setOpenNote(null)} aria-label="Dismiss">
+                Dismiss
+              </button>
+            </p>
+          ) : null}
           <nav className="mb-4 flex gap-2 overflow-x-auto" aria-label="Workflow">
             {STEPS.map((s) => {
               const on = step === s.id;
@@ -412,8 +471,8 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           <TextField label="NID" value={dam.nid} onChange={(nid) => update({ nid })} tag={<FieldTag dam={dam} field="nid" />} />
           <TextField label="County" value={dam.county} onChange={(county) => update({ county })} tag={<FieldTag dam={dam} field="county" />} />
           <NumField label="Year" value={dam.year} onChange={(year) => update({ year })} tag={<FieldTag dam={dam} field="year" />} />
-          <NumField label="Height" suffix="ft" value={dam.heightFt} step={0.1} onChange={(heightFt) => update({ heightFt })} tag={<FieldTag dam={dam} field="heightFt" />} />
-          <NumField label="Length" suffix="ft" value={dam.lengthFt} onChange={(lengthFt) => update({ lengthFt })} tag={<FieldTag dam={dam} field="lengthFt" />} />
+          <NumField label="Height" suffix="ft" value={dam.heightFt} step={0.1} {...inputRange("heightFt", dam.heightFt)} onChange={(heightFt) => update({ heightFt })} tag={<FieldTag dam={dam} field="heightFt" />} />
+          <NumField label="Length" suffix="ft" value={dam.lengthFt} {...inputRange("lengthFt", dam.lengthFt)} onChange={(lengthFt) => update({ lengthFt })} tag={<FieldTag dam={dam} field="lengthFt" />} />
           <NumField label="Crest" suffix="ft" value={dam.crestFt} step={0.1} onChange={(crestFt) => update({ crestFt })} tag={
             <>
               <FieldTag dam={dam} field="crestFt" />
@@ -427,7 +486,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           <NumField label="Streambed (breach bottom)" suffix="ft" value={dam.streambedFt} step={0.1} onChange={(streambedFt) => update({ streambedFt })} tag={<FieldTag dam={dam} field="streambedFt" />} />
           <NumField label="Spillway" suffix="ft" value={dam.spillwayFt} step={0.1} onChange={(spillwayFt) => update({ spillwayFt })} />
           <NumField label="Normal pool" suffix="ft" value={dam.normalPoolFt} step={0.1} onChange={(normalPoolFt) => update({ normalPoolFt })} />
-          <NumField label="Storage" suffix="ac-ft" value={dam.storageAcFt} onChange={(storageAcFt) => update({ storageAcFt })} tag={<FieldTag dam={dam} field="storageAcFt" />} />
+          <NumField label="Storage" suffix="ac-ft" value={dam.storageAcFt} {...inputRange("storageAcFt", dam.storageAcFt)} onChange={(storageAcFt) => update({ storageAcFt })} tag={<FieldTag dam={dam} field="storageAcFt" />} />
           <NumField
             label="Surface area at top of dam"
             suffix="ac, 0 = unknown"
@@ -453,8 +512,8 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
             options={[...(dam.statedDatum === "" ? [["", "— choose —"] as [string, string]] : []), "Local", "NAVD88", "NGVD29"]}
             onChange={(statedDatum) => update({ statedDatum: statedDatum as DatumName })}
           />
-          <NumField label="Latitude" suffix="°" value={dam.lat ?? NaN} step={0.00001} onChange={(lat) => update({ lat })} tag={<FieldTag dam={dam} field="lat" />} />
-          <NumField label="Longitude" suffix="°" value={dam.lon ?? NaN} step={0.00001} onChange={(lon) => update({ lon })} tag={<FieldTag dam={dam} field="lon" />} />
+          <NumField label="Latitude" suffix="°" value={dam.lat ?? NaN} step={0.00001} min={-90} max={90} warning={latLonWarning(dam, "lat")} onChange={(lat) => update({ lat })} tag={<FieldTag dam={dam} field="lat" />} />
+          <NumField label="Longitude" suffix="°" value={dam.lon ?? NaN} step={0.00001} min={-180} max={180} warning={latLonWarning(dam, "lon")} onChange={(lon) => update({ lon })} tag={<FieldTag dam={dam} field="lon" />} />
           {dam.statedDatum === "NGVD29" ? (
             <NumField
               label="NGVD29 → NAVD88 offset"
@@ -477,11 +536,7 @@ function RecordStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           <Row k="Offset" v={result.datum.offsetFt == null ? "—" : `${num(result.datum.offsetFt, 2)} ft`} />
         </dl>
         {result.datum.warnings.length > 0 ? (
-          <ul className="mt-4 space-y-2 text-sm text-amber">
-            {result.datum.warnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
+          <FlagList flags={datumFlags(result)} className="mt-4 space-y-2 text-sm text-amber" testId="datum-flags" />
         ) : (
           <p className="mt-4 text-sm text-muted">No review flags on this record.</p>
         )}
@@ -712,9 +767,31 @@ function TerrainStep({
 
 const breathe = () => new Promise<void>((r) => setTimeout(r, 0));
 
+/** The IndexedDB error of this dam's last layer save, or null (outline-store.ts). Starts null, so SSR and the first client render agree. */
+function useOutlineSaveError(id: string): string | null {
+  return useSyncExternalStore(
+    onOutlineSaveChange,
+    () => outlineSaveError(id),
+    () => null,
+  );
+}
+
+/** "and saved with this dam", or the storage error when IndexedDB refused the layer. */
+function SavedNote({ id }: { id: string }) {
+  const err = useOutlineSaveError(id);
+  if (!err)
+    return <>and saved with this dam (the terrain itself is not kept).</>;
+  return (
+    <>
+      but <span className="text-amber" data-testid="outline-not-saved">layer not saved (storage error: {err}). It stays on the desk for this visit only; the browser may be out of storage or in a private window.</span>
+    </>
+  );
+}
+
 /**
  * The terrain outline: built on request from one 3DEP terrain request (about 3.5 MB for a 10 km reach), saved on the
- * dam so it shows offline. The build runs in short chunks so the page stays responsive.
+ * dam so it shows offline. The build runs in a Web Worker (inundation-client.ts), so the page stays responsive and
+ * Cancel stops it; where no worker can be made it runs in-thread in short chunks, as before.
  */
 function OutlinePanel({
   dam,
@@ -731,25 +808,32 @@ function OutlinePanel({
   const update = useDesk((s) => s.update);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const building = useRef<AbortController | null>(null);
   useEffect(() => onStatus?.({ busy, error }), [busy, error, onStatus]);
+  // A build keeps running when the user moves to another step meanwhile; its result is still saved on its own dam
+  // (the activeId guard below drops it only if another dam is active by then). Only Cancel stops it.
   if (outline.state === "none") return null;
   const build = async () => {
     const io = outlineInputs(dam, result);
     if (!io.ok) return setError(io.reason);
     const id = dam.id;
     setError(null);
+    const ctl = new AbortController();
+    building.current = ctl;
     try {
       setBusy("Preparing the terrain request…");
-      const r = await buildInundationReach(dam, result, { yieldFn: breathe, onStatus: setBusy });
+      const r = await buildInundationInWorker(dam, result, { yieldFn: breathe, onStatus: setBusy, signal: ctl.signal });
       if (useDesk.getState().activeId !== id) return;
       if (r.ok) update({ outline: r.cache });
       else setError(r.reason);
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error).message !== CANCELLED) setError((e as Error).message);
     } finally {
+      if (building.current === ctl) building.current = null;
       setBusy(null);
     }
   };
+  const cancel = () => building.current?.abort();
   const s = outline.state === "ready" ? outline.stats : null;
   const layer = outline.state === "ready" ? outline.layer : "outline";
   const rec = layerOfRecord(dam, result, outline);
@@ -791,6 +875,11 @@ function OutlinePanel({
           {outline.state !== "offline" ? (
             <button type="button" onClick={() => void build()} disabled={busy != null} className={btn}>
               {busy ? "Building…" : s ? "Build again" : "Build the inundation layer"}
+            </button>
+          ) : null}
+          {busy ? (
+            <button type="button" onClick={cancel} className={btn} data-testid="outline-cancel">
+              Cancel
             </button>
           ) : null}
           {dam.outline ? (
@@ -879,8 +968,7 @@ function OutlinePanel({
           <p className="mt-1 text-xs text-muted" data-testid="outline-dem">
             Terrain: {s.dem.width} × {s.dem.height} cells at {num(s.dem.cellM, 0)} m (NAVD88); depth from Muskingum-Cunge
             routing of the breach hydrograph on DEM cross-sections and {routed.method === "spread" ? "a volume spread" : "a terrain fill"}, not a full 2-D hydraulic model. Built{" "}
-            {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} and saved with this dam (the terrain
-            itself is not kept). {DEM_ATTRIBUTION}
+            {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {DEM_ATTRIBUTION}
           </p>
         </>
       ) : s ? (
@@ -925,8 +1013,7 @@ function OutlinePanel({
             {s.dem.missing ? ` ${s.dem.missing} cells missing,` : ""} {s.rings} rings after smoothing; {s.droppedPatches}{" "}
             patches under the minimum dropped, {s.filledHoles} holes filled. Water surface = the traced channel bed (pits
             filled) + the desk depth at that distance downstream; ground must be under it and connected to the channel.
-            Built {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} and saved with this dam (the
-            terrain itself is not kept). {DEM_ATTRIBUTION}
+            Built {new Date(outline.state === "ready" ? outline.builtAt : "").toLocaleString()} <SavedNote id={dam.id} /> {DEM_ATTRIBUTION}
           </p>
         </>
       ) : null}
@@ -1107,10 +1194,25 @@ function Nd911Panel({
       receptors: dam.receptors.map((r) => (r.id === id ? { ...r, habitable: v === "" ? undefined : v === "yes" } : r)),
     });
   const notAdded = t ? t.rows.filter((r) => !r.added) : [];
+  // Pads left estimated because the terrain REQUEST failed (3DEP 502, timeout), as against no terrain at the point.
+  const padRetry = padsToRetry(dam.receptors);
+  const retryPads = () => {
+    padRetry.forEach((r) => padTried.current.delete(r.id));
+    update({ receptors: resetFailedPads(dam.receptors) });
+  };
   const btn = "inline-flex h-10 items-center rounded-sm border border-line bg-paper px-3 text-sm text-ink disabled:opacity-50";
   const small = "inline-flex h-9 items-center rounded-sm border border-line bg-paper px-2 text-xs text-ink";
   return (
     <div className="rounded-md border border-line bg-card p-4" data-testid="nd911-panel">
+      {padRetry.length ? (
+        <p className="mb-2 text-sm text-amber" role="alert" data-testid="nd911-pad-retry">
+          The terrain request for {padRetry.length} structure{padRetry.length === 1 ? "'s" : "s'"} ground height failed ({padRetry[0].padNote?.replace(/^pad estimated: terrain request failed \((.*?)\);.*$/, "$1")}), so{" "}
+          {padRetry.length === 1 ? "it sits" : "they sit"} on the channel bed (pad 0) and the screen holds at Review. This is not "no terrain at the point".{" "}
+          <button type="button" className="underline" onClick={retryPads}>
+            Look the pads up again
+          </button>
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-lg">911 address points {t ? `inside the ${t.against}` : "near the strip"}</h3>
         {nd911.state !== "offline" ? (
@@ -1236,9 +1338,7 @@ function ScreenStep({ dam, result: deskResult }: { dam: DamRecord; result: Retur
           {ref ? `Screen on the source of record: ${ref.label}` : "Desk screen"}
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-3">
-          <span className={`rounded-sm px-3 py-1 text-lg ${LEVEL_CLASS[result.screen.level]}`}>
-            {result.screen.label}
-          </span>
+          <LevelBadge level={result.screen.level} label={result.screen.label} />
           <p className="max-w-lg text-sm text-muted">
             ND rules on the ACER TM 11 depth-velocity charts: a home in the high-danger zone reads High; in the judgment
             zone it reads {result.screen.judgmentAsProbable ? "High (flagged; old option)" : "Medium by rule"}; any wet home reads at
@@ -1293,6 +1393,9 @@ function ScreenStep({ dam, result: deskResult }: { dam: DamRecord; result: Retur
 function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: ReturnType<typeof analyze> }) {
   const { result, ref, label } = useAnalysisOfRecord(dam, deskResult);
   const view = useRef<HTMLElement>(null);
+  // The inventory pull dates for the Report's age line, only for a record that came from the inventories.
+  const { data: nd } = useNdData(Boolean(dam.nidId || dam.nidRef));
+  const bundles = nd ? { nidFetchedUtc: nd.nidSource.fetchedUtc, dwrPulledUtc: nd.dwrSource?.pulledUtc ?? null } : undefined;
   return (
     <section ref={view} className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1313,8 +1416,8 @@ function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: Retur
           </p>
           {ref?.warnings.length ? (
             <ul className="mt-1 list-disc pl-5 text-xs text-amber">
-              {ref.warnings.map((w) => (
-                <li key={w}>{w}</li>
+              {ref.warnings.map((w, i) => (
+                <li key={`run-${i}`}>{w}</li>
               ))}
             </ul>
           ) : null}
@@ -1322,7 +1425,7 @@ function ReportStep({ dam, result: deskResult }: { dam: DamRecord; result: Retur
         <ViewExport target={view} kind="report" dam={dam} result={result} />
       </div>
       <AoiNote flood={result.flood} />
-      <PaperReport dam={dam} result={result} source={label} runWarnings={ref?.warnings ?? []} />
+      <PaperReport dam={dam} result={result} source={label} runWarnings={ref?.warnings ?? []} bundles={bundles} />
       <ExportPanel dam={dam} result={result} desk={deskResult} />
       <PluginPanel dam={dam} result={result} />
       {dam.nidId ? <SourcesNote dam={dam} /> : null}
@@ -1604,13 +1707,7 @@ function AoiNote({ flood }: { flood: ReturnType<typeof analyze>["flood"] }) {
           {flood.aoi.direction ? <p className="mt-1 text-muted">{flood.aoi.direction}</p> : null}
         </>
       ) : null}
-      {flood.warnings.length > 0 ? (
-        <ul className="mt-2 space-y-1 text-amber">
-          {flood.warnings.map((w) => (
-            <li key={w}>{w}</li>
-          ))}
-        </ul>
-      ) : null}
+      {flood.warnings.length > 0 ? <FlagList flags={floodFlags({ flood })} className="mt-2 space-y-1 text-amber" testId="flood-flags" /> : null}
     </div>
   );
 }
@@ -1908,12 +2005,21 @@ function TextField({
   );
 }
 
+/**
+ * A number input with the desk's own limits on it. `min`/`max` (and `inputMode="decimal"`, the numeric keypad on a
+ * phone) come from the caller; `warning` is the field's own out-of-range or clamp text, shown under the box in amber
+ * (the engine still clamps, engine.ts bounded(); this just says so where the value is typed). The box itself is
+ * marked invalid (aria-invalid) while the warning stands.
+ */
 function NumField({
   label,
   value,
   onChange,
   suffix,
   step = 1,
+  min,
+  max,
+  warning,
   tag,
 }: {
   label: string;
@@ -1921,6 +2027,9 @@ function NumField({
   onChange: (v: number) => void;
   suffix?: string;
   step?: number;
+  min?: number;
+  max?: number;
+  warning?: string | null;
   tag?: ReactNode;
 }) {
   return (
@@ -1931,15 +2040,40 @@ function NumField({
       </span>
       <input
         type="number"
+        inputMode="decimal"
         step={step}
+        min={min}
+        max={max}
+        aria-invalid={warning ? true : undefined}
         // A missing value (NaN) shows blank, never 0; clearing the box makes it missing again.
         value={Number.isFinite(value) ? value : ""}
         onChange={(e) => onChange(e.target.value === "" ? Number.NaN : Number(e.target.value))}
-        className="mt-1 h-11 w-full rounded-sm border border-line bg-paper px-3 tabular-nums text-ink"
+        className={"mt-1 h-11 w-full rounded-sm border bg-paper px-3 tabular-nums text-ink " + (warning ? "border-amber" : "border-line")}
       />
+      {warning ? (
+        <span className="mt-1 block text-xs text-amber" role="status">
+          {warning}
+        </span>
+      ) : null}
       {tag}
     </label>
   );
+}
+
+/** The field's own out-of-range text (W-V1), only once a value is typed: a blank field is "missing", said elsewhere. */
+function inputRange(field: keyof typeof INPUT_RANGE, v: number): { min: number; max: number; warning: string | null } {
+  const r = INPUT_RANGE[field];
+  return { min: r.lo, max: r.hi, warning: Number.isFinite(v) ? inputRangeWarning(field, v) : null };
+}
+
+/** A latitude or longitude out of its range, or the pair swapped (guided.ts locationProblem), under both fields. */
+function latLonWarning(dam: DamRecord, which: "lat" | "lon"): string | null {
+  const v = which === "lat" ? dam.lat : dam.lon;
+  if (v == null || !Number.isFinite(v)) return null;
+  if (which === "lat" && Math.abs(v) > 90) return "Latitude must be between -90 and 90.";
+  if (which === "lon" && Math.abs(v) > 180) return "Longitude must be between -180 and 180.";
+  const p = locationProblem(dam);
+  return p && /swapped/.test(p) ? p : null;
 }
 
 /** A number input that may be left blank (undefined = use the default). */
