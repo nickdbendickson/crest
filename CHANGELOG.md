@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-11-08
+
+- **The desk says when it is no longer being saved.** A localStorage overflow — a big record, or the auto-fetched
+  `nd911` address cache (the 911 panel fetches on mount, thousands of points over a town) — was only `console.warn`'d,
+  so from then on every edit (a hazard-class override, receptors, elevations) lived in memory only and was lost on
+  reload with no sign. `deskStorage.setItem` now records the failure on a `useSaveStatus` store and the desk shows a
+  banner, so a desk that is no longer being saved says so. No computed value changes. (audit H16, failure channel;
+  moving the `nd911` / `plss` caches out of localStorage into IndexedDB so the overflow cannot happen is a separate,
+  flagged follow-up.)
+- **A stale tab no longer clobbers a newer tab's saved desk.** Two tabs each hold their own records, and zustand
+  persist writes the whole desk on every edit, so a tab holding an old snapshot overwrote a newer tab's save and the
+  next load's orphan GC then deleted the dam and its IndexedDB layer the other tab had added. Each save now bumps a
+  monotonic counter (`crest-desk-seq`); a tab that sees a newer counter from another tab stops saving — so it never
+  overwrites the newer desk — and the desk asks the engineer to reload. No rehydrate, no new deletion path, and the
+  GC is unchanged (a bare storage-event rehydrate destroys every saved layer, and merge-on-write breaks `restore()` —
+  both verified). No computed value changes. (audit H17)
+
+## 2026-11-07
+
+- **A judgment-zone home is Medium by rule on an imported run, not High.** `rankSample` and
+  `analysisOfRecord` defaulted `judgmentAsProbable` to `true`, so an imported run with the flag
+  unset classed a habitable structure in the ACER judgment zone as High (probable loss of life),
+  while `acer.ts`, `engine.ts`, `types.ts` and the desk control all default `false` (Medium by
+  rule, Nick 2026-10-30). Both now default `false`; this lowers such a structure from High to
+  Medium on imported runs with the flag unset. Homes above the high line are unaffected. (audit H22)
+- **Batch resume retries dams whose previous attempt failed.** The resume skip-set was built from
+  every id in `batch.jsonl` regardless of status, so a dam whose last run failed (3DEP/911 briefly
+  down) was treated as done and never screened. The skip-set now excludes `failed` rows; the jsonl
+  stays append-only and the CSV dedupes by id, last row winning. Same fix in `scripts/batch-dams.mjs`
+  and `BatchScreen.tsx`. (audit H04)
+- **Desk panels no longer write one dam's data onto another.** `pickAuto`, `readGround`, the 911
+  auto-lookup, the pad lookup, the manual 911 lookup and the PLSS lookup each fired a long 3DEP/911
+  read and then wrote the result onto whichever dam was active when it resolved; switching dams
+  mid-read corrupted the other dam's geometry, DEM crest, 911 cache, pads or PLSS. Each write is now
+  guarded by the active dam id captured before the await, mirroring the inundation-build guard. (audit H25, H26)
+
 ## 2026-11-05
 
 - **Auto-derived records aim the schematic strip down the traced channel (two-pass), not the first downhill.** A
