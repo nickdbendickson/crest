@@ -6,7 +6,7 @@
     "src/components/crest/BatchTable.tsx": "2727ef50b86a295043fda85aa91a7dcb305f86f2e4fc0f39c085731d5ed0791a",
     "src/components/crest/charts.tsx": "bc2bd7cf68397388dd90cf1a3408a283bad6f49778cd6b4dbe4b791eb54bd70c",
     "src/components/crest/ClientOnly.tsx": "07f2a891b51d428f39f0d4e48f1a74a96935deaccdadeb39724951d37c3ddb57",
-    "src/components/crest/DamitMark.tsx": "1b0129cba9645f7c284e8c9670c540a7c34bbcde324f669e253f91120f88d086",
+    "src/components/crest/DamitMark.tsx": "614dbae2768509e3be71041af1086f1c2f55d37d86c23ac4f5fd5a787480c0d1",
     "src/components/crest/Dashboard.tsx": "1486793f2eccbf6fd8c6fdadb8b6121a0bec8c17cf38bd41ec52c7a22770fa99",
     "src/components/crest/DashboardMap.tsx": "06d107ab94c336a1e68f11654cfd25782d138e483ddd435d51cfc503bda716a6",
     "src/components/crest/desk.tsx": "dde0b8d78165f27cc752e2558bb1ae436d4818abe8474dd8fc63b71c3e92d53f",
