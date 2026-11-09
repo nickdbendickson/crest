@@ -65,7 +65,11 @@ export const corridorHalfM = (halfM: number) => Math.min(Math.max(3 * halfM, 300
  *  router — MCT on confined reaches, frozen Muskingum-Cunge on flat plains and tiny pools (routing.ts). 6 = 2026-11-04:
  *  the outline leaves out pit, pond and side-basin storage and bands on the capped depth. 7 = 2026-11-04: the outline
  *  volume soft limit (about 5× the release), channel pits counted against the release, and suspected crossings. 8 =
- *  2026-11-05: the routed spread's pools settle into one sheet (spread.ts settlePools). */
+ *  2026-11-05: the routed spread's pools settle into one sheet (spread.ts settlePools).
+ *
+ *  This is also the SPREAD METHOD version the published accuracy envelope is scored on: docs/accuracy-envelope.md
+ *  carries "Scored on trace-version N", and outline.test.ts fails with "re-score the envelope" when N differs from
+ *  this, so a bump here lands with a re-score of the four baselines in the same PR. */
 export const TRACE_VERSION = 8;
 
 /**
@@ -392,6 +396,8 @@ export type OutlineStats = {
    * thresholds were fit on). Absent on layers built before 2026-11-04, or when the probe could not be built.
    */
   extent?: ExtentSensitivity;
+  /** Why there is no extent check: the routed-spread probe failed with this message (inundation.ts probeExtent). */
+  extentError?: string;
 };
 
 /** The layer's outer boundary as drawn (extentOf): one dark line around the flood, for the map and the GeoJSON export. */
@@ -560,6 +566,8 @@ export function outlineInputs(dam: DamRecord, result: Analysis): { ok: true; inp
     fromM = aoi.nearKm * 1000;
   }
   const r = (n: number) => Math.round(n * 1000) / 1000;
+  // The fingerprint mixes in the two METHOD versions (the engine's numerics and the terrain trace), never the build
+  // version (version.ts): a rebuild that changes no method must not ask every saved layer to be built again.
   const fingerprint = fnv(
     JSON.stringify({
       v: ENGINE_VERSION,
@@ -659,11 +667,18 @@ export function demUrl(req: DemRequest) {
   return `${DEM_SERVICE}/exportImage?${q.toString()}`;
 }
 
+/** True on a little-endian platform (every browser and Node build Crest runs on; checked, not assumed). */
+const LITTLE_ENDIAN = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
 /** The float32 raster from an exportImage bsq response (a trailing validity mask, when present, is ignored). */
 export function parseBsq(buf: ArrayBuffer, width: number, height: number): Float32Array {
   const need = width * height * 4;
   if (buf.byteLength < need)
     throw new Error(`The 3DEP terrain service returned ${buf.byteLength} bytes; expected ${need} for ${width} × ${height}.`);
+  // The bytes are little-endian float32 already: on a little-endian platform the typed array reads them as they are
+  // (one memcpy of the 4.3 MB a 10 m request returns, instead of a DataView call per cell). The copy, not a view,
+  // so the result owns its buffer and can be transferred to a worker whole. Big-endian keeps the DataView.
+  if (LITTLE_ENDIAN) return new Float32Array(buf.slice(0, need));
   const view = new DataView(buf);
   const z = new Float32Array(width * height);
   for (let i = 0; i < z.length; i++) z[i] = view.getFloat32(i * 4, true);
@@ -804,6 +819,37 @@ export function traceRings(mask: Uint8Array, W: number, H: number): Ring[] {
       if (!at(i, j - 1)) out[j * VW + i + 1] |= 4; // top: TR -> TL (west)
       if (!at(i - 1, j)) out[j * VW + i] |= 8; // left: TL -> BL (south)
     }
+  return linkRings(out, W, H);
+}
+
+/**
+ * traceRings for every band at once: one pass over the band grid (−1 = dry, else 0..nBands−1) emits each cell's
+ * boundary edges into its own band's vertex bitmap, then each bitmap is linked into rings exactly as traceRings links
+ * one mask. Six bands used to mean six full-grid passes (and six 1-byte masks of N cells); the rings that come out are
+ * the same, band for band, point for point. Bands with no cells get an empty list.
+ */
+export function traceBandRings(band: Int8Array, nBands: number, W: number, H: number): Ring[][] {
+  const VW = W + 1;
+  const outs: (Uint8Array | null)[] = Array.from({ length: nBands }, () => null);
+  const edges = (b: number) => outs[b] ?? (outs[b] = new Uint8Array(VW * (H + 1)));
+  for (let j = 0; j < H; j++) {
+    const row = j * W;
+    for (let i = 0; i < W; i++) {
+      const b = band[row + i];
+      if (b < 0) continue;
+      const out = edges(b);
+      if (j + 1 >= H || band[row + W + i] !== b) out[(j + 1) * VW + i] |= 1; // bottom: BL -> BR (east)
+      if (i + 1 >= W || band[row + i + 1] !== b) out[(j + 1) * VW + i + 1] |= 2; // right: BR -> TR (north)
+      if (j === 0 || band[row - W + i] !== b) out[j * VW + i + 1] |= 4; // top: TR -> TL (west)
+      if (i === 0 || band[row + i - 1] !== b) out[j * VW + i] |= 8; // left: TL -> BL (south)
+    }
+  }
+  return outs.map((out) => (out ? linkRings(out, W, H) : []));
+}
+
+/** Link a vertex edge bitmap (traceRings' encoding) into rings; consumes the bitmap. */
+function linkRings(out: Uint8Array, W: number, H: number): Ring[] {
+  const VW = W + 1;
   const DI = [1, 0, -1, 0];
   const DJ = [0, -1, 0, 1];
   const rings: Ring[] = [];
@@ -873,9 +919,9 @@ function chaikin(r: XY[]): XY[] {
   return o;
 }
 
-/** Polygons (outer + holes, vertex units) of one band mask; rings of 4 cells or fewer dropped. */
-function polygonsOf(mask: Uint8Array, W: number, H: number): XY[][][] {
-  const rings = traceRings(mask, W, H).filter((r) => Math.abs(r.area) > 4);
+/** Polygons (outer + holes, vertex units) of one band's traced rings; rings of 4 cells or fewer dropped. */
+function polygonsOf(traced: Ring[]): XY[][][] {
+  const rings = traced.filter((r) => Math.abs(r.area) > 4);
   const outers = rings.filter((r) => r.area > 0).map((r) => {
     const bb = [Infinity, Infinity, -Infinity, -Infinity];
     for (const [x, y] of r.pts) {
@@ -1030,6 +1076,39 @@ export function polygonizeDepth(
   depthFt: Float32Array,
   opts: { common: FloodStrip["properties"]; label: string; title: string; capFt?: number },
 ): PolygonizedDepth {
+  const gen = polygonizeDepthSteps(g, depthFt, opts);
+  for (;;) {
+    const r = gen.next();
+    if (r.done) return r.value;
+  }
+}
+
+/**
+ * polygonizeDepth with a yield hook between its passes (the band mode filter, the edge trace, each band's smoothing,
+ * the extent line), so the in-thread fallback can let the page breathe. Same result as polygonizeDepth.
+ */
+export async function polygonizeDepthAsync(
+  g: DemGrid,
+  depthFt: Float32Array,
+  opts: { common: FloodStrip["properties"]; label: string; title: string; capFt?: number },
+  yieldFn?: () => Promise<void>,
+): Promise<PolygonizedDepth> {
+  const gen = polygonizeDepthSteps(g, depthFt, opts);
+  for (;;) {
+    const r = gen.next();
+    if (r.done) return r.value;
+    if (yieldFn) await yieldFn();
+  }
+}
+
+/** Rows of the grid between two pauses of polygonizeDepthSteps' per-row passes. */
+const POLY_BREATHE_ROWS = 100;
+
+function* polygonizeDepthSteps(
+  g: DemGrid,
+  depthFt: Float32Array,
+  opts: { common: FloodStrip["properties"]; label: string; title: string; capFt?: number },
+): Generator<void, PolygonizedDepth> {
   const capFt = opts.capFt ?? Infinity;
   const W = g.width;
   const H = g.height;
@@ -1046,9 +1125,10 @@ export function polygonizeDepth(
   const idx = new Map(DEPTH_BANDS.map((b, i) => [b.id, i]));
   const band0 = new Int8Array(N).fill(-1);
   for (let k = 0; k < N; k++) if (wet(k)) band0[k] = idx.get(bandFor(Math.max(WET_FT, Math.min(capFt, depthFt[k]))).id)!;
+  yield;
   const band = new Int8Array(band0);
   const cnt = new Int32Array(DEPTH_BANDS.length);
-  for (let j = 0; j < H; j++)
+  for (let j = 0; j < H; j++) {
     for (let i = 0; i < W; i++) {
       const k = j * W + i;
       if (band0[k] < 0) continue;
@@ -1065,25 +1145,33 @@ export function polygonizeDepth(
       for (let b = 0; b < cnt.length; b++) if (cnt[b] > cnt[best]) best = b;
       band[k] = best;
     }
+    if (j % POLY_BREATHE_ROWS === POLY_BREATHE_ROWS - 1) yield;
+  }
+
+  // Per band: cells and depth stats in one pass over the grid, then the edges of every band traced in one more.
+  const cellCount = new Int32Array(DEPTH_BANDS.length);
+  const accs = DEPTH_BANDS.map((_, b) => bandDepthAcc(b, capFt));
+  for (let k = 0; k < N; k++) {
+    const b = band[k];
+    if (b < 0) continue;
+    cellCount[b]++;
+    accs[b].add(depthFt[k]);
+  }
+  yield;
+  const traced = traceBandRings(band, DEPTH_BANDS.length, W, H);
+  yield;
 
   const features: StripFeature[] = [];
   const bands: OutlineStats["bands"] = [];
   let wetCells = 0;
   let polyAc = 0;
   for (let b = 0; b < DEPTH_BANDS.length; b++) {
-    const mask = new Uint8Array(N);
-    let cells = 0;
-    const acc = bandDepthAcc(b, capFt);
-    for (let k = 0; k < N; k++)
-      if (band[k] === b) {
-        mask[k] = 1;
-        cells++;
-        acc.add(depthFt[k]);
-      }
+    const cells = cellCount[b];
     if (cells === 0) continue;
-    const { dMax, dMin, dMean } = acc.done();
+    const { dMax, dMin, dMean } = accs[b].done();
     wetCells += cells;
-    const polys = polygonsOf(mask, W, H);
+    const polys = polygonsOf(traced[b]);
+    yield;
     if (polys.length === 0) continue;
     let cellArea = 0;
     const coords = polys.map((rings) =>
@@ -1120,6 +1208,7 @@ export function polygonizeDepth(
   const areaAc = r3(polyAc);
   const wetMask = new Uint8Array(N);
   for (let k = 0; k < N; k++) if (band[k] >= 0) wetMask[k] = 1;
+  yield;
   const extent = extentOf(wetMask, W, H, Math.sqrt(cellM2), cellM2, toLonLat, `${opts.title}: flood extent (generalized)`);
   const outline: TerrainOutline = {
     ...(extent ? { extent } : {}),
@@ -1700,7 +1789,7 @@ async function buildOutlineImpl(
     await breathe(W * 9);
   }
 
-  // Per band: cells, depth range, distance range, polygons.
+  // Per band: cells, depth range, distance range (one pass), then the edges of every band traced in one more pass.
   const common = { ...strip.properties };
   const features: StripFeature[] = [];
   const bandsAc: OutlineStats["bands"] = [];
@@ -1708,25 +1797,30 @@ async function buildOutlineImpl(
   let polyAc = 0;
   let reach = 0;
   const toLonLat = (p: XY): [number, number] => [r7(g.bbox[0] + p[0] * dlon), r7(g.bbox[3] + p[1] * dlat)];
+  const cellCount = new Int32Array(DEPTH_BANDS.length);
+  const accs = DEPTH_BANDS.map((_, b) => bandDepthAcc(b, capFt));
+  const loAlong = new Float64Array(DEPTH_BANDS.length).fill(Infinity);
+  const hiAlong = new Float64Array(DEPTH_BANDS.length).fill(-Infinity);
+  for (let k = 0; k < N; k++) {
+    const b = band[k];
+    if (b < 0) continue;
+    cellCount[b]++;
+    accs[b].add(depth[k] / FT);
+    if (along[k] < loAlong[b]) loAlong[b] = along[k];
+    if (along[k] > hiAlong[b]) hiAlong[b] = along[k];
+  }
+  await breathe(N);
+  const traced = traceBandRings(band, DEPTH_BANDS.length, W, H);
+  await breathe(N);
   for (let b = 0; b < DEPTH_BANDS.length; b++) {
-    const mask = new Uint8Array(N);
-    let cells = 0;
-    const acc = bandDepthAcc(b, capFt);
-    let lo = Infinity;
-    let hi = -Infinity;
-    for (let k = 0; k < N; k++)
-      if (band[k] === b) {
-        mask[k] = 1;
-        cells++;
-        acc.add(depth[k] / FT);
-        lo = Math.min(lo, along[k]);
-        hi = Math.max(hi, along[k]);
-      }
+    const cells = cellCount[b];
     if (cells === 0) continue;
-    const { dMax, dMin, dMean } = acc.done();
+    const { dMax, dMin, dMean } = accs[b].done();
+    const lo = loAlong[b];
+    const hi = hiAlong[b];
     wetCells += cells;
     reach = Math.max(reach, hi);
-    const polys = polygonsOf(mask, W, H);
+    const polys = polygonsOf(traced[b]);
     await breathe(N);
     if (polys.length === 0) continue;
     // Acres of the drawn (smoothed) polygons, so the lists and exports add up to what the map shows.

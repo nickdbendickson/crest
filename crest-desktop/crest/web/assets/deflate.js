@@ -1,1 +1,0 @@
-import{t as e}from"./samples5.js";import{t}from"./samples6.js";var n=class extends t{decodeBlock(t){return e(new Uint8Array(t)).buffer}};export{n as default};

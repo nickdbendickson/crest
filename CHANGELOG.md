@@ -65,6 +65,36 @@
   recomputed); `npm install` after pulling confirms it. `build-deps.test.mjs` now also fails if a removed dependency
   comes back or a listed one is imported by nothing. The SSR shell stays: TanStack Start is not a one-line swap for
   a static SPA (the route tree, `Scripts` / `HeadContent` and the Nitro preset are wired through it).
+- **The inundation layer builds in a Web Worker, and can be cancelled.** On a 10 m terrain (ND00199's box is 1,090 ×
+  996 cells) the build ran about 4.7 s on the main thread with 2 s stretches that never yielded (the volume spread, the
+  polygoniser), so the page froze and a click on Cancel had nowhere to go. The trace, routing, spread, settle and
+  polygonisation now run in a dedicated worker (`src/lib/crest/inundation.worker.ts`, inlined into `Crest.html` the
+  way the results worker is), the status lines still arrive, and **Cancel** on the Terrain inundation panel stops the
+  build. Where a worker cannot start the build runs in-thread as before, now yielding inside the spread and the
+  polygoniser too. The layer itself is unchanged: the depth grid and the GeoJSON hash the same as before.
+- **Batch screen: a worker pool, and rows kept in IndexedDB.** The batch builds each structure's layer on a pool of
+  inundation workers sized to the machine (one per spare core, at most 4; the "at N at a time" estimate follows it),
+  so the tab stays live through a county. Result rows go to IndexedDB in one transaction every 10 rows or 2 s instead
+  of rewriting one localStorage string per row (a statewide run would have hit the ~5 MB quota); rows an older Crest
+  left in localStorage are moved across. The finished records kept for **Open in desk** no longer hold their terrain
+  layer (2–5 MB each; it is rebuilt on the desk in one click), and the running worklist is kept in order by inserting
+  each arriving row rather than re-sorting.
+- **Maps draw the terrain layers on canvas, simplified to the zoom.** A 10 m routed layer (six MultiPolygons, ~80,000
+  vertices) was drawn as SVG paths and rebuilt on every render that re-derived it. The Flood-step and dashboard maps
+  now draw a copy simplified to about half a pixel at the current zoom level on a Canvas renderer, re-simplify only
+  when the zoom level changes, and redraw only when the layer's content changes (`src/lib/crest/geo-simplify.ts`;
+  exports, areas and the 911 / PLSS lookups keep the exact rings).
+- **Faster passes in the engine, same numbers.** The spread sorts its cell index once (a typed-array merge sort) instead
+  of boxing and sorting every stretch's cells; the pool settling visits only the wet span of each row and stops early
+  once nothing moves more than 1e-4 ft in a sweep (`SETTLE_TOL_FRACTION`; it reports the sweeps it ran); the band
+  polygoniser traces every band's edges in one pass over the grid instead of six; the 3DEP response is read with one
+  typed-array copy instead of a DataView call per cell. The 30 m and 10 m ND00199 builds are bit-identical to before.
+- **`Crest.html` no longer parses the structure tables on open.** The three data bundles (2.2 MB of JSON, 1.64 MB of
+  it the batch's structure list) were flattened into the single file's one script and parsed on every open. They are
+  now packed gzip + base64 (about 450 KB; the file is about 1.7 MB smaller) and inflated with `DecompressionStream`
+  the first time the picker or the Batch view asks (with fflate's gunzip where a browser lacks that API); the web and
+  desktop builds keep them and `geotiff` as their own lazy chunks (`vite.desktop.config.ts`). Rebuild the desktop
+  bundle and `Crest.html`.
 - **The desk says when it is no longer being saved.** A localStorage overflow — a big record, or the auto-fetched
   `nd911` address cache (the 911 panel fetches on mount, thousands of points over a town) — was only `console.warn`'d,
   so from then on every edit (a hazard-class override, receptors, elevations) lived in memory only and was lost on
@@ -82,6 +112,55 @@
 
 ## 2026-11-07
 
+- **A flood faster than the ACER TM 11 chart's velocity axis is high danger, as in the suite.** `acer.ts zone()` read a
+  velocity past the chart's last column (house 25 ft/s, mobile home 16 ft/s) AT that column, so a shallow fast flood
+  screened judgment zone / Medium, and its header claimed the suite had no velocity-past-axis rule. The suite's
+  `tm11_curves.zone()` returns HIGH past either axis ("the figure does not say a faster or deeper flood is safer"),
+  and the Helper and the Runner screen with it. `zone()` now does the same. Direction: Medium → High for a wet house
+  shallower than 0.73 ft at more than 25 ft/s and a mobile home shallower than 1.86 ft at more than 16 ft/s; imported
+  LISFLOOD / HEC-RAS runs ranked on the desk now agree with the Helper and the Runner. `acer.test.ts` locked the wrong
+  result (`zone("house", 0.5, 30)` as "judgment") and is inverted. (Grok audit 2026-11-07, 3.3)
+- **Every export says which Crest wrote it.** A new build version `crest_version` = `<package.json version>+<short git
+  SHA>` (`version.ts`, injected by both Vite configs from `scripts/crest-version.mjs`; `+local` without git) is stamped
+  on the flood strip and terrain GeoJSON (collection and features) and KML, in `dam.json` (which carried no version at
+  all), as a comment row in the batch CSV and in the Report footer. `ENGINE_VERSION` stays the engine's own method
+  version, bumped to 2026.11.07 with a comment that it must move whenever `analyze()` changes its numbers; it had
+  stayed at 2026.10.30 through every numerics change while the terrain layer's `TRACE_VERSION` went 2 → 8. The
+  version is the committed version + the SHA of HEAD, never a timestamp, so the committed bundles stay reproducible.
+  package.json gains `"version": "0.1.0"`. Exports snapshots regenerated.
+- **Failures that were silent now say what did not happen.** (a) The terrain outline's extent probe swallowed every
+  error and the triage read "no extent check (built before it, or the probe could not be built)": the layer now carries
+  `stats.extentError` and the triage says "the routed-spread probe failed (<reason>)". (b) A 3DEP 502 or timeout
+  during the 911 pad lookup marked the pads "estimated" with the note "no terrain at the point", on the desk and in the
+  batch: the note and the screen's Review text now say "terrain request failed (<reason>), look the pads up again",
+  and the Flood step's 911 panel offers that retry; "no terrain at the point" is kept for a NoData hole in a grid that
+  came back. (c) A failed 911 lookup in the batch left `structures_inside` null but let the screen and triage run on
+  zero receptors; the row's note now reads "911 lookup failed (<reason>); structures unknown", `structures_flooded` is
+  null too, and the triage is forced to at least "Uncertain" with that reason (never "Clearly trivial"). (d) An
+  IndexedDB error while saving a dam's inundation layer resolved silently while the desk said "saved with this dam":
+  `saveOutline` now resolves false, warns, and the desk's terrain panel says "layer not saved (storage error: …)".
+- **The batch command line resumes from a `batch.jsonl` cut short by a kill.** A row appended as the process was killed
+  left a partial last line that `JSON.parse` threw on, so the next start crashed and the run could not resume. Rows are
+  now written as one fsynced line each, a cut-short last line is dropped with a warning (that structure runs again),
+  and a corrupt line anywhere else stops the run and names the line number. The CLI keeps every row in the file across
+  resumes while the desk's Resume keeps only the current selection; that difference is now documented in the code and
+  the README, not changed. New `scripts/batch-dams.test.mjs`.
+- **The desk notices a stale dam inventory.** The bundles record when they were pulled (2026-10-29 NID, 2026-10-30 DWR,
+  2026-11-05 structures) but nothing compared that to today. `data-provenance.ts bundleAge(now)`: past 180 days the
+  picker footer and About the dam data show an amber "Inventory is N months old; `npm run data:nd-dams` refreshes it"
+  line, the Report footer and the batch CSV's comment rows carry each bundle's pull date and age.
+- **Accuracy envelope brought up to the 2026-11-05 re-score and guarded.** `docs/accuracy-envelope.md` still showed the
+  2026-11-04 (34524e0) scores (2801 0.255 / 0.192) while the 11-05 settle (8bc4d20, PR #75) had re-scored them (2801
+  0.331 / 0.233, 2865 0.344 / 0.350, 3034 0.840 / 0.765, 4031 0.429 / 0.136, this changelog below); the trust map and the
+  LISFLOOD table now carry those, citing the entry and the commit (the per-cell recall / precision / bias detail is
+  marked as the 34524e0 measurement until re-measured). `triage.ts`'s module comment quoted older numbers still and is
+  fixed. The page now says "Scored on trace-version 8" and `outline.test.ts` fails with "re-score the envelope" when
+  `TRACE_VERSION` moves past that line.
+- **CSV cells can no longer open as spreadsheet formulas.** The six CSV writers (batch, PLSS, 911, Runner worklist,
+  triage, paper report) each had their own quoting and none neutralised a cell starting with `=`, `+`, `-` or `@`,
+  which Excel, LibreOffice and Sheets run as a formula; the 911 address fields and DWR text are third-party. One
+  `csv.ts csvCell` now prefixes such text with an apostrophe (a formatted number such as `-97.325185` is left alone)
+  and all six use it.
 - **A judgment-zone home is Medium by rule on an imported run, not High.** `rankSample` and
   `analysisOfRecord` defaulted `judgmentAsProbable` to `true`, so an imported run with the flag
   unset classed a habitable structure in the ACER judgment zone as High (probable loss of life),
@@ -101,6 +180,19 @@
 
 ## 2026-11-05
 
+- **Auto-derived records aim the schematic strip down the traced channel (two-pass), not the first downhill.** A
+  record from the Batch screen or *New record from DWR* has no drawn dam line, so the line was laid across the
+  downhill: the lowest ground within 500 m of the inventory point. On DWR-2662 / ND00049 (Swan Buffalo Detention
+  Dam 8) that is 46° (the first ~1 km of Buffalo Creek), but the creek bends east and the straight strip ran off to
+  the north-east (strip CSI 0.00 against the Runner's LISFLOOD-FP run). The batch now traces the drainage with that
+  first line (`traceChannel`), then re-lays the synthesized line across the chord to the trace 4 km down the channel
+  (`aimAlongChannel` / `channelAim` in `batch.ts`; kept when the trace is under 1 km or turns under 5°). DWR-2662:
+  bearing 46° -> 84°, strip CSI 0.00 -> 0.10 (0.01 -> 0.13 at 1 ft), routed spread 0.29 -> 0.35 (0.26 -> 0.27), on
+  the local 1 m mosaic, piping. A drawn dam line is never changed. The strip is still straight: it does not follow
+  bends past the chord. One more terrain request per auto-derived structure. Tests: `batch.test.ts` (channelAim;
+  a DWR-2662-like valley that leaves north and bends east).
+- **New records default to piping** (Nick, 2026-11-05), the failure the Runner and the ND screening use; overtopping
+  stays one click away on the Breach step. `blankDam()` and every record built from it (NID, DWR, batch).
 - **Building a big inundation layer no longer fails with "The quota has been exceeded."** The desk saved its whole
   state, each dam's built layer included, to localStorage on every edit. A routed terrain flood is a large GeoJSON
   (ND00199 / DWR-2801: 5.2 MB), past Safari's ~5 MB per-site limit, so the save threw a QuotaExceededError out of the

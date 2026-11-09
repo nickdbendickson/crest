@@ -3,6 +3,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
+import { crestVersion } from "./scripts/crest-version.mjs";
 
 /**
  * The web deploy: TanStack Start (SSR shell, one route, `/`) built with Nitro's Vercel preset. The desk itself is
@@ -14,6 +15,9 @@ import { nitro } from "nitro/vite";
  * `0.0.0.0:8080` is the dev-server contract (startup.sh and the smoke tests expect it).
  */
 export default defineConfig(({ command, isPreview }) => ({
+  // The build version every export is stamped with (src/lib/crest/version.ts): package.json version + git SHA of
+  // HEAD, the same for every build of the same tree. The desktop config defines the same constant.
+  define: { __CREST_VERSION__: JSON.stringify(crestVersion()) },
   server: {
     host: "0.0.0.0",
     port: 8080,

@@ -6,6 +6,12 @@ Desk screening of small embankment dams: breach hydrograph, schematic valley flo
 Crest is a screen, not the layer of record. Where its flood footprint can be trusted and where a Breach Runner run is
 needed is in [docs/accuracy-envelope.md](docs/accuracy-envelope.md).
 
+Every export (flood strip and terrain GeoJSON / KML, `dam.json`, the batch CSV, the Report) carries two versions: the
+Crest build that wrote it, `crest_version` = `<package.json version>+<short git SHA>` (`src/lib/crest/version.ts`, injected
+by both Vite configs from `scripts/crest-version.mjs`; `+local` without git or under the tests), and the engine's method
+version `engine_version` (`engine.ts ENGINE_VERSION`, bumped whenever `analyze()` changes its numbers). The terrain layer
+adds `trace_version` (`outline.ts TRACE_VERSION`).
+
 ## Start here
 
 **Three ways to run the same desk** (one `src/`, one engine; the records you enter autosave in the browser or app):
@@ -138,8 +144,10 @@ DWR"), "edited (NID: x)" with a revert, or "not in NID: enter a value". **Unlink
 | `src/lib/crest/data/nd_dams_dwr.json` | North Dakota Department of Water Resources, Dams and Dugouts layers (`mapservice.dwr.nd.gov`). Dams: numeric fields, the stated vertical datum code, NAVD 88 values (NGVD 29 converted with NOAA VERTCON before the build; the stated value and shift kept), held-field names, and the county where it differs. Dugouts: five numeric reference fields for dugouts whose NID ID is a main dam. No owner, name, contact, designer, remark or permit fields. Provisional, provided as is; field meanings are inferred. | 2026-10-30 |
 
 The source URL, download time, SHA-256 of the raw file and the attribution are stored in each bundle and shown in the
-picker footer, the Report, the dam.json export and **About the dam data** at the bottom of the desk. Refresh only when
-asked: `npm run data:nd-dams` (downloads the NID CSV; `--from file.csv` to use a saved one; it fails on a schema change
+picker footer, the Report, the dam.json export and **About the dam data** at the bottom of the desk. Past 180 days the
+picker footer and About the dam data show an amber "Inventory is N months old" line naming the refresh command, the
+Report's footer and the batch CSV's comment rows carry each bundle's pull date and age (`src/lib/crest/data-provenance.ts`).
+Refresh only when asked: `npm run data:nd-dams` (downloads the NID CSV; `--from file.csv` to use a saved one; it fails on a schema change
 or if the dam count drops below 800 or more than 20% below the committed bundle, unless `--allow-shrink`), then `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp> --pulled <UTC time>`
 (a folder with `Dams_navd88.csv` and `Dugouts_navd88.csv`, converted to NAVD 88 by per-point VERTCON outside the app,
 plus `raw/` and `grids/` `SHA256SUMS.txt`; the build checks each NAVD 88 value against stated + shift and refuses a
@@ -170,19 +178,29 @@ says which it did, and that the terrain layer is rebuilt on the Flood step in on
 - **The record is auto-derived.** Height and storage come from the inventory (NID dams as the picker fills them; DWR
   `max_dam_he` / `max_pool_v`; dugout `max_height` / `max_storag`). The crest is the DWR NAVD 88 elevation where the
   picker would offer it, else the highest 3DEP cell within 30 m of the inventory point; streambed = crest − H; the
-  downstream direction points at the lowest cell within 500 m, and a dam line is synthesized across it. The record
+  downstream direction points at the lowest cell within 500 m, and a dam line is synthesized across it; then the
+  drainage is traced from the toe and the line is re-laid across the chord to the trace 4 km down the channel, so the
+  straight strip points down the valley the water takes (kept when the trace is under 1 km or turns under 5°). New
+  records default to piping. The record
   says so (*Batch record (auto-derived …)*) and its crest provenance is "DEM". Check the point, crest and direction
   before relying on a row.
 - **Needs data:** a structure with no height, storage or location is listed and skipped. Statewide (default filters)
   that is about 4,400 of 9,700, mostly small DWR dams and dugouts with no height or storage on file.
-- **Scale:** about 4–25 s a structure, mostly the 3DEP download, two at a time. The estimate starts from that prior
-  (8 s a small structure, 25 s over 500 ac-ft) and, after three rows have run, uses the mean time of this run's rows
-  per size class over what is left, updating as rows finish. A county is minutes to under an hour;
-  statewide (~5,300 runnable) is hours. Only the small result rows are kept in browser storage, so **Resume** works
-  after a reload; the finished records (for Open in desk) stay in memory.
+- **Scale:** about 4–25 s a structure, mostly the 3DEP download, one structure per spare core at a time (at most four;
+  the builds run in Web Workers, so the tab stays live). The estimate starts from that prior (8 s a small structure,
+  25 s over 500 ac-ft) and, after three rows have run, uses the mean time of this run's rows per size class over what
+  is left, updating as rows finish. A county is minutes to under an hour; statewide (~5,300 runnable) is hours. Only
+  the small result rows are kept in browser storage (IndexedDB), so **Resume** works after a reload; the finished
+  records (for Open in desk, without their terrain layer) stay in memory.
 - **Command line:** `npm run batch:dams -- --out batch-out --state` runs the same thing in Node, appends each row to
-  `batch-out/batch.jsonl` (start it again to resume) and writes `batch-out/batch.csv`. `--list` prints the selection
-  and the time estimate. With `--dem /path/ND_1m_EPSG26914.vrt` the terrain comes from a local raster through
+  `batch-out/batch.jsonl` (one fsynced line per structure; start it again to resume, and a last line cut short by a
+  kill is dropped with a warning and that structure runs again, while a corrupt line anywhere else stops the run and
+  names the line) and writes `batch-out/batch.csv`. `--list` prints the selection and the time estimate. **Resume keeps
+  different rows on the two sides, on purpose:** the command line keeps every row in `batch.jsonl` and writes them all
+  to the CSV, whatever the current `--county`/`--ids` selection (the file is the record of a long run that may be
+  resumed in pieces); the desk's Resume keeps only the rows whose structure is in the selection on screen, so its table
+  and CSV always match what is picked. The CSV's first rows are comments: the disclaimer, the Crest build and engine
+  versions, and the age of each inventory bundle. With `--dem /path/ND_1m_EPSG26914.vrt` the terrain comes from a local raster through
   `gdalwarp` (on PATH, or QGIS's copy on macOS; `--gdalwarp <path>` to name it) instead of 3DEP: no per-dam download
   (about 1.5 s a small dam instead of 7 s), and the crest is read on a 2 m grid, so it lands on the embankment top.
   The VRT must be in metres (`--dem-feet` for a feet DEM); mosaic gaps are NoData. The 911 address points still come
