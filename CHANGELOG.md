@@ -2,6 +2,99 @@
 
 ## 2026-11-08
 
+- **README starts with how to run Crest.** The first user instruction sat at line 192, after the scripts table and
+  the deploy-migration notes. A **Start here** section now opens the README: the three ways to run the same desk
+  (`Crest.html`, the desktop app, the web app), the eight steps in a sentence each, and what needs the network: the
+  basemap tiles whenever a map shows; the terrain layer, the 911 points and the PLSS sections one request each on a
+  button, saved with the dam; Google Fonts on the web app only. The false "Tiles are the desk's only network use"
+  (`__root.tsx` loads two Google Fonts; `outline.ts`, `nd911.ts`, `plss.ts` and the dashboard hillshade all fetch) is
+  corrected there, in the Basemap and Desktop sections, in `vite.desktop.config.ts` and in the desktop smoke test's
+  wording. The scripts table moved under **For developers**.
+- **Warning codes.** Only the two NID height checks had codes (W-H1, W-H2); every other review flag was free text,
+  rendered with the text as its React key (two equal texts collided) and impossible to name in a report or a bug.
+  `src/lib/crest/warnings.ts` is the catalogue: `Warning = { code, severity: info | warn | stop, text }` with W-D1
+  (datum), W-V1 (volume / input band), W-R1 (reach incomplete), W-E1 (extent probe failed), W-P1 (pad terrain
+  failed), W-S1 (layer stale) beside W-H1 / W-H2. The engine's datum and flood checks, `volumeCheck`, the NID height
+  checks and `outlineState`'s stale message now carry codes; `Analysis.datum.flags` / `flood.flags` sit beside the
+  unchanged `warnings` string lists, and `warningText()` / `datumFlags()` / `floodFlags()` adapt either way, so every
+  consumer and test that expects strings still gets exactly the text it had. No threshold or wording moved. The
+  Record aside, the Flood flags, the guided-setup and dashboard pills and the paper report show the code before the
+  text with stable keys; the README lists the codes. Tests: `warnings.test.ts`.
+- **Record step validates what is typed.** The number fields took anything and the engine clamped silently to a
+  warning shown only on the Record aside. Height (4–200 ft), storage (1–500,000 ac-ft) and length (40–20,000 ft) now
+  carry `min` / `max` from the one `INPUT_RANGE` the engine clamps with, every number field has `inputMode="decimal"`
+  (the numeric keypad on a phone), and the field's own out-of-range text (the same W-V1 sentence) shows under the box
+  in amber with `aria-invalid`. Latitude and longitude carry their ranges, and the two swapped (a North Dakota
+  longitude in the latitude box) is caught under both fields and on the guided Record card (`guided.ts
+  locationProblem`, shared by `recordProblems`).
+- **Results: the "Terrain outline" map mode works.** It was permanently disabled with a note about a branch merged a
+  week ago. It now shows the layer saved with the dam (the routed flood or the bathtub outline, read with
+  `outlineState` the way the guided setup does, labelled accordingly), fits the map to it, and is disabled with the
+  layer's own reason ("not built yet", "inputs changed, build it again", offline) only when there is nothing current
+  to show; if the layer goes stale while showing, the map falls back to the desk strip.
+- **Batch table: sort, filter, sticky header, copy id, no 760 px floor.** The results table is its own component
+  (`BatchTable.tsx`, on `@tanstack/react-table`): every column sorts (triage, screen and status in worklist order,
+  numbers with blanks last; a third click restores the worklist order), one box filters on triage, county, id, name
+  or status, the header stays while the body scrolls, each row's id has a one-click copy, and the county, screen and
+  released columns fold away below the sm / md widths (the CSV has them all) so the table fits a phone. The default
+  order is still `sortRows`. The run loop in `BatchScreen.tsx` is untouched.
+- **Batch "Open in desk" no longer adds a record on every click.** It selects the record already on the desk for
+  that structure when there is one (an earlier open, or a record from the NID / DWR pickers, matched on the structure
+  id in `nid` / `nidId` or the batch record id) and only adds one when none exists; a dismissable note on the desk
+  says which it did and that the terrain layer is rebuilt on the Flood step in one click.
+- **Batch time estimate learns from the run.** It was the fixed 8 s / 25 s prior halved. `batch.ts runningEstimate`
+  keeps that prior until three rows of the run are timed, then uses the mean of `row.seconds` per size class (a class
+  with no timed row borrows the overall mean scaled by the prior ratio) over what is still to run, two at a time,
+  updating as rows finish; the summary line says the measured per-structure times once it has them.
+- **Accessibility basics.** The screen-level badge was colour alone: it now carries a glyph-and-letter mark (▲ H,
+  ■ M, ● L, ? R) and an `aria-label` with the level's meaning. The batch load error has `role="alert"`. The map
+  legend's layer toggles (flood strip, terrain outline, PLSS, 911) are real buttons with `aria-pressed`, in tab order,
+  with a visible focus ring over the tiles.
+- **Dead app-builder scaffolding removed.** `src/lib/{auth,app-data,multiplayer,og}`, `src/lib/db.ts`, the preview
+  bridge and path-prefix rewrite, `server/`, `migrations/`, `scripts/{migrate,migration-plan,preview*,brand-check,
+  sign-out-plan,check-auth-invariant,grok-*,browser-*,write-atomic,with-app-env,app-env-plugin}.mjs` and their tests,
+  `.grok/`, `public/__grok` and `public/og.jpg`: all imported only by `src/routes/__root.tsx` (AuthProvider, the
+  preview bridge) or by nothing, with `VITE_AUTH_ENABLED=false` and `deploy.database=false`. `__root.tsx` now renders
+  the desk alone; `vite.config.ts` is TanStack Start + Nitro (Vercel preset) with no plugins of its own; `npm run
+  build` is `vite build` and `vercel.json` runs it (no migration step; `build:deploy`, `db:migrate`, `check:auth`,
+  `preview:*` are gone). Dependencies dropped after a repo-wide import grep: `@electric-sql/pglite`, `pg`,
+  `@types/pg`, `kysely`, `better-auth`, `jose`, `@tanstack/react-query`, `react-hook-form`, `@hookform/resolvers`,
+  `zod`, `playwright`, every `@radix-ui/*`, `cmdk`, `vaul`, `sonner`, `react-day-picker`, `date-fns`, `recharts`,
+  `react-resizable-panels`, `class-variance-authority`, `tailwind-merge`, `clsx`, `tw-animate-css`. The
+  `package-lock.json` was pruned to the packages the remaining tree reaches (kept entries byte-identical, flags
+  recomputed); `npm install` after pulling confirms it. `build-deps.test.mjs` now also fails if a removed dependency
+  comes back or a listed one is imported by nothing. The SSR shell stays: TanStack Start is not a one-line swap for
+  a static SPA (the route tree, `Scripts` / `HeadContent` and the Nitro preset are wired through it).
+- **The inundation layer builds in a Web Worker, and can be cancelled.** On a 10 m terrain (ND00199's box is 1,090 ×
+  996 cells) the build ran about 4.7 s on the main thread with 2 s stretches that never yielded (the volume spread, the
+  polygoniser), so the page froze and a click on Cancel had nowhere to go. The trace, routing, spread, settle and
+  polygonisation now run in a dedicated worker (`src/lib/crest/inundation.worker.ts`, inlined into `Crest.html` the
+  way the results worker is), the status lines still arrive, and **Cancel** on the Terrain inundation panel stops the
+  build. Where a worker cannot start the build runs in-thread as before, now yielding inside the spread and the
+  polygoniser too. The layer itself is unchanged: the depth grid and the GeoJSON hash the same as before.
+- **Batch screen: a worker pool, and rows kept in IndexedDB.** The batch builds each structure's layer on a pool of
+  inundation workers sized to the machine (one per spare core, at most 4; the "at N at a time" estimate follows it),
+  so the tab stays live through a county. Result rows go to IndexedDB in one transaction every 10 rows or 2 s instead
+  of rewriting one localStorage string per row (a statewide run would have hit the ~5 MB quota); rows an older Crest
+  left in localStorage are moved across. The finished records kept for **Open in desk** no longer hold their terrain
+  layer (2–5 MB each; it is rebuilt on the desk in one click), and the running worklist is kept in order by inserting
+  each arriving row rather than re-sorting.
+- **Maps draw the terrain layers on canvas, simplified to the zoom.** A 10 m routed layer (six MultiPolygons, ~80,000
+  vertices) was drawn as SVG paths and rebuilt on every render that re-derived it. The Flood-step and dashboard maps
+  now draw a copy simplified to about half a pixel at the current zoom level on a Canvas renderer, re-simplify only
+  when the zoom level changes, and redraw only when the layer's content changes (`src/lib/crest/geo-simplify.ts`;
+  exports, areas and the 911 / PLSS lookups keep the exact rings).
+- **Faster passes in the engine, same numbers.** The spread sorts its cell index once (a typed-array merge sort) instead
+  of boxing and sorting every stretch's cells; the pool settling visits only the wet span of each row and stops early
+  once nothing moves more than 1e-4 ft in a sweep (`SETTLE_TOL_FRACTION`; it reports the sweeps it ran); the band
+  polygoniser traces every band's edges in one pass over the grid instead of six; the 3DEP response is read with one
+  typed-array copy instead of a DataView call per cell. The 30 m and 10 m ND00199 builds are bit-identical to before.
+- **`Crest.html` no longer parses the structure tables on open.** The three data bundles (2.2 MB of JSON, 1.64 MB of
+  it the batch's structure list) were flattened into the single file's one script and parsed on every open. They are
+  now packed gzip + base64 (about 450 KB; the file is about 1.7 MB smaller) and inflated with `DecompressionStream`
+  the first time the picker or the Batch view asks (with fflate's gunzip where a browser lacks that API); the web and
+  desktop builds keep them and `geotiff` as their own lazy chunks (`vite.desktop.config.ts`). Rebuild the desktop
+  bundle and `Crest.html`.
 - **The desk says when it is no longer being saved.** A localStorage overflow — a big record, or the auto-fetched
   `nd911` address cache (the 911 panel fetches on mount, thousands of points over a town) — was only `console.warn`'d,
   so from then on every edit (a hazard-class override, receptors, elevations) lived in memory only and was lost on
@@ -19,6 +112,55 @@
 
 ## 2026-11-07
 
+- **A flood faster than the ACER TM 11 chart's velocity axis is high danger, as in the suite.** `acer.ts zone()` read a
+  velocity past the chart's last column (house 25 ft/s, mobile home 16 ft/s) AT that column, so a shallow fast flood
+  screened judgment zone / Medium, and its header claimed the suite had no velocity-past-axis rule. The suite's
+  `tm11_curves.zone()` returns HIGH past either axis ("the figure does not say a faster or deeper flood is safer"),
+  and the Helper and the Runner screen with it. `zone()` now does the same. Direction: Medium → High for a wet house
+  shallower than 0.73 ft at more than 25 ft/s and a mobile home shallower than 1.86 ft at more than 16 ft/s; imported
+  LISFLOOD / HEC-RAS runs ranked on the desk now agree with the Helper and the Runner. `acer.test.ts` locked the wrong
+  result (`zone("house", 0.5, 30)` as "judgment") and is inverted. (Grok audit 2026-11-07, 3.3)
+- **Every export says which Crest wrote it.** A new build version `crest_version` = `<package.json version>+<short git
+  SHA>` (`version.ts`, injected by both Vite configs from `scripts/crest-version.mjs`; `+local` without git) is stamped
+  on the flood strip and terrain GeoJSON (collection and features) and KML, in `dam.json` (which carried no version at
+  all), as a comment row in the batch CSV and in the Report footer. `ENGINE_VERSION` stays the engine's own method
+  version, bumped to 2026.11.07 with a comment that it must move whenever `analyze()` changes its numbers; it had
+  stayed at 2026.10.30 through every numerics change while the terrain layer's `TRACE_VERSION` went 2 → 8. The
+  version is the committed version + the SHA of HEAD, never a timestamp, so the committed bundles stay reproducible.
+  package.json gains `"version": "0.1.0"`. Exports snapshots regenerated.
+- **Failures that were silent now say what did not happen.** (a) The terrain outline's extent probe swallowed every
+  error and the triage read "no extent check (built before it, or the probe could not be built)": the layer now carries
+  `stats.extentError` and the triage says "the routed-spread probe failed (<reason>)". (b) A 3DEP 502 or timeout
+  during the 911 pad lookup marked the pads "estimated" with the note "no terrain at the point", on the desk and in the
+  batch: the note and the screen's Review text now say "terrain request failed (<reason>), look the pads up again",
+  and the Flood step's 911 panel offers that retry; "no terrain at the point" is kept for a NoData hole in a grid that
+  came back. (c) A failed 911 lookup in the batch left `structures_inside` null but let the screen and triage run on
+  zero receptors; the row's note now reads "911 lookup failed (<reason>); structures unknown", `structures_flooded` is
+  null too, and the triage is forced to at least "Uncertain" with that reason (never "Clearly trivial"). (d) An
+  IndexedDB error while saving a dam's inundation layer resolved silently while the desk said "saved with this dam":
+  `saveOutline` now resolves false, warns, and the desk's terrain panel says "layer not saved (storage error: …)".
+- **The batch command line resumes from a `batch.jsonl` cut short by a kill.** A row appended as the process was killed
+  left a partial last line that `JSON.parse` threw on, so the next start crashed and the run could not resume. Rows are
+  now written as one fsynced line each, a cut-short last line is dropped with a warning (that structure runs again),
+  and a corrupt line anywhere else stops the run and names the line number. The CLI keeps every row in the file across
+  resumes while the desk's Resume keeps only the current selection; that difference is now documented in the code and
+  the README, not changed. New `scripts/batch-dams.test.mjs`.
+- **The desk notices a stale dam inventory.** The bundles record when they were pulled (2026-10-29 NID, 2026-10-30 DWR,
+  2026-11-05 structures) but nothing compared that to today. `data-provenance.ts bundleAge(now)`: past 180 days the
+  picker footer and About the dam data show an amber "Inventory is N months old; `npm run data:nd-dams` refreshes it"
+  line, the Report footer and the batch CSV's comment rows carry each bundle's pull date and age.
+- **Accuracy envelope brought up to the 2026-11-05 re-score and guarded.** `docs/accuracy-envelope.md` still showed the
+  2026-11-04 (34524e0) scores (2801 0.255 / 0.192) while the 11-05 settle (8bc4d20, PR #75) had re-scored them (2801
+  0.331 / 0.233, 2865 0.344 / 0.350, 3034 0.840 / 0.765, 4031 0.429 / 0.136, this changelog below); the trust map and the
+  LISFLOOD table now carry those, citing the entry and the commit (the per-cell recall / precision / bias detail is
+  marked as the 34524e0 measurement until re-measured). `triage.ts`'s module comment quoted older numbers still and is
+  fixed. The page now says "Scored on trace-version 8" and `outline.test.ts` fails with "re-score the envelope" when
+  `TRACE_VERSION` moves past that line.
+- **CSV cells can no longer open as spreadsheet formulas.** The six CSV writers (batch, PLSS, 911, Runner worklist,
+  triage, paper report) each had their own quoting and none neutralised a cell starting with `=`, `+`, `-` or `@`,
+  which Excel, LibreOffice and Sheets run as a formula; the 911 address fields and DWR text are third-party. One
+  `csv.ts csvCell` now prefixes such text with an apostrophe (a formatted number such as `-97.325185` is left alone)
+  and all six use it.
 - **A judgment-zone home is Medium by rule on an imported run, not High.** `rankSample` and
   `analysisOfRecord` defaulted `judgmentAsProbable` to `true`, so an imported run with the flag
   unset classed a habitable structure in the ACER judgment zone as High (probable loss of life),
