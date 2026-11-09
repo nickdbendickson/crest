@@ -117,6 +117,7 @@ describe("InundationWorker", () => {
     const Spy = class extends FakeWorker {
       constructor() {
         super();
+        // eslint-disable-next-line @typescript-eslint/no-this-alias -- the spy records the instance it made
         made = this;
       }
     } as unknown as new () => Worker;
@@ -155,7 +156,9 @@ describe("InundationWorker", () => {
 
 describe("InundationPool and poolSize", () => {
   it("sizes to the spare cores, 1..4", () => {
-    assert.equal(poolSize(undefined), 1);
+    // An explicit undefined takes the default, the runtime's navigator.hardwareConcurrency (Node 21+ has one too).
+    const auto = poolSize(undefined);
+    assert.ok(auto >= 1 && auto <= 4, `${auto}`);
     assert.equal(poolSize(2), 1);
     assert.equal(poolSize(4), 3);
     assert.equal(poolSize(16), 4);
