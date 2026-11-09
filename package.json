@@ -83,7 +83,7 @@
     "geotiff": "^3.0.5",
     "html-to-image": "^1.11.13",
     "jose": "6.2.9",
-    "kysely": "^0.28.5",
+    "kysely": "^0.29.8",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
     "lightningcss": "^1.28.0",
