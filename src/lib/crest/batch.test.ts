@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  AIM_CHORD_M,
+  AIM_MIN_TRACE_M,
   BATCH_CSV_HEAD,
+  aimAlongChannel,
+  channelAim,
   batchCsv,
   deriveFromDem,
   deriveRecord,
@@ -22,10 +26,12 @@ import {
   type Structure,
   type StructuresBundle,
 } from "./batch.ts";
+import { ENGINE_VERSION } from "./engine.ts";
 import type { FloodStrip } from "./floodstrip.ts";
 import { nd911Bbox } from "./nd911.ts";
 import type { NdData } from "./nd-dams.ts";
 import type { DemGrid, DemRequest } from "./outline.ts";
+import { CREST_VERSION } from "./version.ts";
 
 const M_PER_DEG_LAT = 110574;
 const kx = (lat: number) => 111320 * Math.cos((lat * Math.PI) / 180);
@@ -188,14 +194,24 @@ describe("one structure through the desk path", () => {
     assert.equal(row.screen, "Low");
   });
 
-  it("never calls a dam trivial when the 911 points could not be looked up", async () => {
+  it("never calls a dam trivial when the 911 lookup failed: structures unknown (null), at least uncertain, and the note says so", async () => {
     const fail = (async () => {
-      throw new Error("offline");
+      throw new Error("the ND GIS Hub service answered HTTP 502");
     }) as never;
     const { row } = await runStructure(S(), { fetchDem: fakeDem, fetchNd911: fail });
     assert.equal(row.status, "done");
-    assert.notEqual(row.triage?.recommendation, "trivial");
-    assert.match(row.reason ?? "", /911 address points not looked up/);
+    assert.ok(row.triage);
+    assert.notEqual(row.triage!.recommendation, "trivial");
+    assert.equal(row.structuresInside, null, "a failed lookup is unknown, never 0");
+    assert.equal(row.structuresFlooded, null);
+    assert.match(row.reason ?? "", /^911 lookup failed \(the ND GIS Hub service answered HTTP 502\); structures unknown\./);
+    // The same structure with the lookup working is trivial on this synthetic valley, so the downgrade is what held it.
+    const ok = await runStructure(S(), { fetchDem: fakeDem, fetchNd911: noNd911 });
+    assert.equal(ok.row.structuresInside, 0);
+    if (ok.row.triage?.recommendation === "trivial") {
+      assert.equal(row.triage!.recommendation, "uncertain");
+      assert.match(row.triage!.summary, /911 lookup failed/);
+    }
   });
 
   it("reports needs-data without fetching anything, and a terrain failure as failed", async () => {
@@ -269,13 +285,23 @@ describe("worklist order and CSV", () => {
     );
   });
 
-  it("writes the disclaimer, the header and one line per row", () => {
-    const csv = batchCsv(rows).trim().split("\n");
+  it("writes the disclaimer, the versions, the inventory ages, the header and one line per row", () => {
+    const now = new Date("2027-06-01T00:00:00Z");
+    const csv = batchCsv(rows, { nidFetchedUtc: "2026-10-29T21:56:00Z", dwrPulledUtc: "2026-10-30T14:31:02Z", structuresPulledUtc: null, now }).trim().split("\n");
     assert.match(csv[0], /^# Screening estimate/);
-    assert.equal(csv[1], BATCH_CSV_HEAD.join(","));
-    assert.equal(csv.length, 2 + rows.length);
-    assert.match(csv[2], /^R,DWR dam,R,Cass,/);
-    assert.match(csv[5], /needs-data/);
+    assert.equal(csv[1], `# Crest ${CREST_VERSION}; ${ENGINE_VERSION}. Written 2027-06-01.`);
+    assert.match(csv[2], /^# NID inventory pulled 2026-10-29 \(7 months old; stale, past 180 days: `npm run data:nd-dams` refreshes it\)$/);
+    assert.match(csv[3], /^# DWR dam values pulled 2026-10-30 \(6 months old; stale/);
+    assert.equal(csv[4], BATCH_CSV_HEAD.join(","));
+    assert.equal(csv.length, 5 + rows.length);
+    assert.match(csv[5], /^R,DWR dam,R,Cass,/);
+    assert.match(csv[8], /needs-data/);
+    // Without the bundle sources: the disclaimer and the version row only.
+    const bare = batchCsv(rows, { now }).trim().split("\n");
+    assert.equal(bare[2], BATCH_CSV_HEAD.join(","));
+    // A fresh inventory is not called stale.
+    const fresh = batchCsv(rows, { nidFetchedUtc: "2026-10-29T21:56:00Z", now: new Date("2026-11-07T00:00:00Z") }).trim().split("\n");
+    assert.equal(fresh[2], "# NID inventory pulled 2026-10-29 (8 days old)");
   });
 });
 
@@ -295,5 +321,83 @@ describe("committed bundle", () => {
     assert.deepEqual(nordell.map((s) => s.id), ["DWR-16431"]);
     assert.match(nordell[0].label, /UNK-2400/);
     assert.ok(!structures.some((s) => s.id === "UNK-2400"));
+  });
+});
+
+// ---- the two-pass aim (Nick 2026-11-05): the strip down the traced channel, not the first few hundred metres of it.
+
+describe("channelAim", () => {
+  // A channel leaving the dam north for 1.5 km, then east (DWR-2662 / ND00049: Buffalo Creek leaves north and bends east).
+  const bend = (): { e: number; n: number; x: number }[] => {
+    const pts: { e: number; n: number; x: number }[] = [];
+    for (let x = 0; x <= 1500; x += 10) pts.push({ e: 0, n: x, x });
+    for (let x = 1510; x <= 8000; x += 10) pts.push({ e: x - 1500, n: 1500, x });
+    return pts;
+  };
+  it("aims at the chord to AIM_CHORD_M down the channel", () => {
+    const a = channelAim(bend(), [0, 1])!;
+    assert.ok(a, "re-aimed");
+    // At 4 km down the channel the trace is at (2500 E, 1500 N): bearing atan2(2500, 1500) = 59.0°.
+    assert.ok(Math.abs(a.bearingDeg - 59) < 0.5, `bearing ${a.bearingDeg}`);
+    assert.equal(a.chordM, AIM_CHORD_M);
+    assert.equal(a.fromDeg, 0);
+  });
+  it("keeps the downhill on a short trace or a straight valley", () => {
+    const short = bend().filter((p) => p.x < AIM_MIN_TRACE_M - 10);
+    assert.equal(channelAim(short, [0, 1]), null);
+    const straight = Array.from({ length: 500 }, (_, i) => ({ e: i * 0.5, n: i * 10, x: i * 10 }));
+    assert.equal(channelAim(straight, [0, 1]), null, "a turn under AIM_MIN_TURN_DEG keeps the downhill");
+  });
+  it("uses the trace's end when it is shorter than the chord", () => {
+    const pts = bend().filter((p) => p.x <= 2500);
+    const a = channelAim(pts, [0, 1])!;
+    // End (1000 E, 1500 N): bearing 33.7°.
+    assert.ok(Math.abs(a.bearingDeg - 33.7) < 0.5, `bearing ${a.bearingDeg}`);
+    assert.equal(a.chordM, 2500);
+  });
+});
+
+describe("two-pass aim on a bending valley (DWR-2662-like)", () => {
+  // Toe at the point; the valley runs north 1.5 km then east, 0.2 % down the channel, banks 3 %; a pool and embankment
+  // south of the point (the reservoir side).
+  const along = (e: number, n: number) => {
+    // Distance down the bent channel of the nearest channel point, and the distance from the channel.
+    const legA = { s: Math.max(0, Math.min(1500, n)), d: Math.hypot(e, n - Math.max(0, Math.min(1500, n))) };
+    const eb = Math.max(0, e);
+    const legB = { s: 1500 + eb, d: Math.hypot(e - eb, n - 1500) };
+    return legA.d <= legB.d ? legA : legB;
+  };
+  const z = (lon: number, lat: number) => {
+    const e = (lon - LON) * kx(LAT);
+    const n = (lat - LAT) * M_PER_DEG_LAT;
+    if (n < -40) return 505 + 0.0005 * -n; // reservoir side: pool floor rising upstream
+    if (n < 0) return 512; // embankment
+    const a = along(e, n);
+    return 500 - 0.002 * a.s + 0.03 * a.d;
+  };
+  const bendDem = async (req: DemRequest): Promise<DemGrid> => {
+    const out = new Float32Array(req.width * req.height);
+    for (let j = 0; j < req.height; j++)
+      for (let i = 0; i < req.width; i++) {
+        const lon = req.bbox[0] + ((i + 0.5) / req.width) * (req.bbox[2] - req.bbox[0]);
+        const lat = req.bbox[3] - ((j + 0.5) / req.height) * (req.bbox[3] - req.bbox[1]);
+        out[j * req.width + i] = z(lon, lat);
+      }
+    return { ...req, z: out };
+  };
+  it("re-lays the synthesized line down the bent channel, not the downhill", async () => {
+    const s = S({ heightFt: 30, storageAcFt: 3900, areaAc: 330, lengthFt: 1275 });
+    const rec = deriveRecord(s, await bendDem(nearRequest(LON, LAT)));
+    assert.ok(rec.ok);
+    if (!rec.ok) return;
+    // The downhill at the toe point points north (the channel's first leg).
+    assert.ok(rec.derived.bearingDeg < 20 || rec.derived.bearingDeg > 340, `downhill ${rec.derived.bearingDeg}`);
+    const aimed = await aimAlongChannel(rec.dam, rec.derived.u, bendDem);
+    assert.ok(aimed.aim, "re-aimed");
+    assert.ok(aimed.aim!.bearingDeg > 25 && aimed.aim!.bearingDeg < 80, `aimed ${aimed.aim!.bearingDeg}`);
+    assert.match(aimed.dam.sampleNote ?? "", /Re-aimed along the traced channel/);
+    const { row } = await runStructure(s, { fetchDem: bendDem, fetchNd911: noNd911 });
+    assert.equal(row.status, "done");
+    assert.ok(row.bearingDeg! > 25 && row.bearingDeg! < 80, `row bearing ${row.bearingDeg}`);
   });
 });
