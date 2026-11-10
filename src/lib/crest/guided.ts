@@ -11,6 +11,7 @@ import { missingForNext } from "./nd-dams.ts";
 import type { OutlineState } from "./outline.ts";
 import { num } from "./format.ts";
 import type { Analysis, DamRecord } from "./types.ts";
+import { datumFlags, floodFlags } from "./warnings.ts";
 
 export type GuidedKey = "record" | "breach" | "terrain" | "review";
 
@@ -80,9 +81,10 @@ export function guidedSteps(
       label: GUIDED_LABEL.record,
       detail: [dam.name || "Unnamed dam", dam.nid].filter(Boolean).join(" · "),
       error: rec.length ? rec.join("; ") : undefined,
-      flags: result.datum.warnings.map((text, i) => ({
+      flags: datumFlags(result).map((w, i) => ({
         key: `datum-${i}`,
-        text,
+        text: w.text,
+        code: w.code,
         sev: "warning" as const,
       })),
     },
@@ -119,9 +121,10 @@ export function guidedSteps(
         ? `Desk screen ${result.screen.label}: open the dashboard`
         : "Build the terrain layer first, or review on the strip",
       flags: [
-        ...result.flood.warnings.map((text, i) => ({
+        ...floodFlags(result).map((w, i) => ({
           key: `flood-${i}`,
-          text,
+          text: w.text,
+          code: w.code,
           sev: "warning" as const,
         })),
       ],
