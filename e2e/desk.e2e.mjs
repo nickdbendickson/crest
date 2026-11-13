@@ -53,7 +53,9 @@ function start(cmd, args, opts, ready) {
   const found = new Promise((resolve, reject) => {
     let text = "";
     const on = (chunk) => {
-      text += chunk;
+      // Without colour codes: on a CI terminal vite prints the port in bold ("127.0.0.1:\x1b[1m8081").
+      // eslint-disable-next-line no-control-regex
+      text += String(chunk).replace(/\x1b\[[0-9;]*m/g, "");
       const m = text.match(ready);
       if (m) resolve(m);
     };

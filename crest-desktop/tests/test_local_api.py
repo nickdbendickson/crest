@@ -27,7 +27,7 @@ class LocalApiTests(unittest.TestCase):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.home = Path(cls.tmp.name) / "home"
         cls.home.mkdir()
-        cls.env = mock.patch.dict(os.environ, {"HOME": str(cls.home), "CREST_WORK": "", "CREST_WORK_ROOTS": ""})
+        cls.env = mock.patch.dict(os.environ, {"HOME": str(cls.home), "USERPROFILE": str(cls.home), "CREST_WORK": "", "CREST_WORK_ROOTS": ""})
         cls.env.start()
         web = Path(cls.tmp.name) / "web"
         web.mkdir()
@@ -183,7 +183,7 @@ class ResolveWorkTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name)
-        self.env = mock.patch.dict(os.environ, {"HOME": str(self.home), "CREST_WORK": "", "CREST_WORK_ROOTS": ""})
+        self.env = mock.patch.dict(os.environ, {"HOME": str(self.home), "USERPROFILE": str(self.home), "CREST_WORK": "", "CREST_WORK_ROOTS": ""})
         self.env.start()
 
     def tearDown(self):

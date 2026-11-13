@@ -281,6 +281,9 @@ class NumsTests(unittest.TestCase):
         self.assertEqual(_nums([[1.0, float("nan")], [3.0, 4.0]]), [1.0, 3.0, 4.0])
 
 
+# The fake qgis_process and ndbreach CLI these tests run are "#!/usr/bin/env python3" scripts, which Windows cannot
+# execute directly; the hand-off's own logic is the same on every platform and is covered on Linux and macOS.
+@unittest.skipIf(os.name == "nt", "the fake qgis_process is a shebang script (POSIX only)")
 class GateTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -361,7 +364,8 @@ class GateTests(unittest.TestCase):
         settings = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(settings["only_ids"], "ND00199")
         text = self.calls_text()
-        self.assertIn(f"--SETTINGS={path}", text)
+        # The hand-off resolves the work folder, and on macOS the temp dir is a symlink (/var -> /private/var).
+        self.assertIn(f"--SETTINGS={path.resolve()}", text)
         self.assertIn("--DAM_ID=ND00199", text)
         self.assertIn("--DAM_ID=ND00199", text)
 
@@ -727,6 +731,7 @@ class RobustnessTests(unittest.TestCase):
         _opt_num(cmd, "TOP_FT", 12.5)
         self.assertEqual(cmd, ["--TOP_FT=12.5"])
 
+    @unittest.skipIf(os.name == "nt", "'?' is not allowed in a Windows folder name")
     def test_chain_names_handles_a_work_path_with_a_question_mark(self):
         # A '?' in the work-folder name must not break the SQLite file: URI (it would be read as a query, leaving
         # the path truncated so the open fails and the dam is silently not found). Build a minimal gpkg and look
