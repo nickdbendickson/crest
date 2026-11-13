@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import threading
+from unittest import mock
 import time
 import unittest
 from pathlib import Path
@@ -669,6 +670,36 @@ class RobustnessTests(unittest.TestCase):
             folder = root / "dams" / "ND00199"
             record = json.loads((folder / "dam.json").read_text(encoding="utf-8"))
             self.assertEqual(len(record["status"]), n, "every concurrent write must land its status entry")
+
+    def test_replace_is_retried_when_windows_refuses_it(self):
+        # Windows answers "Access is denied" to a replace while anything has the target open for an instant.
+        from crest import handoff
+
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "dam.json"
+            calls = []
+            real = os.replace
+
+            def flaky(a, b):
+                calls.append(1)
+                if len(calls) < 3:
+                    raise PermissionError(13, "Access is denied")
+                return real(a, b)
+
+            with mock.patch.object(handoff.os, "replace", flaky), mock.patch.object(handoff.time, "sleep", lambda _s: None):
+                handoff._dump(path, {"ok": True})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"ok": True})
+            self.assertEqual(len(calls), 3)
+            self.assertEqual([p.name for p in Path(d).iterdir()], ["dam.json"], "no .part file is left behind")
+
+            # A replace that never succeeds still fails, and still cleans up its .part file.
+            def never(_a, _b):
+                raise PermissionError(13, "Access is denied")
+
+            with mock.patch.object(handoff.os, "replace", never), mock.patch.object(handoff.time, "sleep", lambda _s: None):
+                with self.assertRaises(PermissionError):
+                    handoff._dump(Path(d) / "other.json", {"ok": True})
+            self.assertEqual([p.name for p in Path(d).iterdir()], ["dam.json"])
 
     # ---- H2: run output is kept head + tail only -------------------------------------------------------------
     def test_collect_bounded_keeps_head_and_tail_and_notes_the_drop(self):
