@@ -65,6 +65,66 @@ is unchanged from before the codes existed; no threshold moved.
 | W-H1 | NID height looks structural, not the breach head (see the NID picker). | warn |
 | W-H2 | H disagrees with crest minus breach bottom by more than the tolerance. | warn |
 
+## Saving and moving your work
+
+The desk's dams live in the browser you are using (or the desktop app's own storage), not on a server. Under the dam
+list:
+
+- **Save desk to file** writes every dam on the desk to one file, `crest-desk-<date>.json`: inputs, receptors, drawn
+  lines and areas, saved 911 / PLSS lookups, the terrain layer and any imported run's summary. This is the backup, and
+  the way to move a desk to another computer or between `Crest.html`, the desktop app and the web app.
+- **Open desk file or dam.json** reads that file back. *Add to this desk* never changes a dam already on the desk: a
+  dam that is already there and identical is left alone, and one with the same id but different content is added
+  beside it as "(from file)". *Replace this desk* makes the desk exactly the file's dams.
+- A **dam.json** from the Report step opens too. One written since 2026-11-13 carries the whole record
+  (`crest_record`, without the terrain layer) and comes back as it was. An older one, or the desktop's dam-folder
+  `dam.json`, holds the engineering inputs only: it opens as a new record with those inputs and a note that receptors,
+  drawn geometry and layers were not in the file.
+
+A file is read as data only: each record is rebuilt field by field, and a value of the wrong type is dropped with a
+note (`src/lib/crest/desk-file.ts`).
+
+## Settings: starting pool, roughness and the shared defaults
+
+Crest's presets are the pool at the top of dam, a piping failure, Froehlich (2008) and Manning's n of 0.035 in the
+channel and 0.06 on the floodplain. They can be changed in two places.
+
+**On one record (Breach step, "Advanced: starting pool and roughness").**
+
+- *Starting pool*: top of dam (the default), the record's normal pool, or an elevation you enter (in the same datum
+  as the crest; it is tied to NAVD88 the same way). Below the top of dam the head on the breach is lower and the
+  breach equations use the storage at that pool, so the peak and the released volume are smaller. A pool that cannot
+  be used (no normal pool on the record, above the top of dam, not above the breach bottom) falls back to the top of
+  dam and says why. Inflow cases (PMF, flow over the spillway with or without a breach) are the Runner's, not Crest's.
+- *Manning's n*, channel and floodplain (0.01 to 0.3). Used by the routed flood on the terrain: travel time, depth and
+  spread. Changing either asks for the terrain layer to be built again; the LISFLOOD export's `fpfric` follows the
+  floodplain value.
+
+These belong to the record: they are saved with it, in the desk file and in its `dam.json`.
+
+**For every new record (header, Settings).** Settings holds the suite's *shared defaults*, the same `defaults.json`
+the QGIS plugins read (DamSafety Core: Plugins > Dam safety > Shared defaults): the sunny-day starting pool, the
+failure mode, the breach equation and Manning's n. A new record, a record made from the NID or DWR pickers and every
+batch row starts from them. Records you already have are not changed; the Breach step lists where a record differs
+from the shared defaults and has a button to put it back on them.
+
+| Where | Your values live in | How to change them |
+| --- | --- | --- |
+| Desktop app | `~/DamSafety/defaults.json` (or the path in `CREST_DEFAULTS` / `DAMSAFETY_DEFAULTS`) | Settings > Save writes the file. Editing it in QGIS or by hand works too; Crest reads it when it opens. |
+| Web desk, Crest.html | this browser | Settings > Save. *Open settings file* reads a `defaults.json`; *Save settings file* writes one to hand to the plugins. |
+| Batch command line | a file you name | `npm run batch:dams -- --defaults ~/DamSafety/defaults.json ...` |
+
+Your file holds only the keys you changed, so a key you never touched follows the suite's value when the suite is
+updated. Unknown keys and out-of-range values are left out and named, never guessed. Crest has three of the suite's
+breach equations (Froehlich 2008, MacDonald & Langridge-Monopolis, a TR-60 width); if the shared defaults ask for
+another, new records start on Froehlich (2008) and Settings says so. `pmf_breach_volume` is kept in the file for the
+Runner and not used by Crest.
+
+Every `dam.json` Crest writes (Report step, and the desktop's dam folder) carries an `assumptions` entry, the same one
+a Runner run writes: what the record used, in the shared file's own names, the shared values at the time, and
+`differs`, the keys where the two are not the same. `starting_pool_ft` and `starting_pool_rule` give the pool the
+breach really started from.
+
 ## Drawn area of interest (AOI)
 
 A drawn area limits the schematic flood. The valley is laid from the breach in the downstream direction; the reach
@@ -124,7 +184,9 @@ If a desktop webview ever needs something the policy blocks, start the app with 
 
 `npm run test:e2e` opens all three in Chromium, walks the eight steps on the first sample dam with every service
 stubbed, and fails on anything the policy blocks (`e2e/`; needs `npx playwright install chromium` once, and
-`npm run build` for the web app).
+`npm run build` for the web app). It then runs a batch of nine structures on each of the three and does to it what a
+long batch meets: Stop part way, a reloaded page, Resume, the terrain service dropping (the batch pauses and retries),
+Stop retrying, Resume to the end, the CSV, and a row opened on the desk (`e2e/batch-walk.mjs`).
 
 ## North Dakota dam picker (NID, with DWR values)
 
@@ -213,9 +275,18 @@ says which it did, and that the terrain layer is rebuilt on the Flood step in on
 - **Scale:** about 4–25 s a structure, mostly the 3DEP download, one structure per spare core at a time (at most four;
   the builds run in Web Workers, so the tab stays live). The estimate starts from that prior (8 s a small structure,
   25 s over 500 ac-ft) and, after three rows have run, uses the mean time of this run's rows per size class over what
-  is left, updating as rows finish. A county is minutes to under an hour; statewide (~5,300 runnable) is hours. Only
-  the small result rows are kept in browser storage (IndexedDB), so **Resume** works after a reload; the finished
-  records (for Open in desk, without their terrain layer) stay in memory.
+  is left, updating as rows finish. A county is minutes to under an hour; statewide (~5,300 runnable) is hours.
+- **A batch of any size can be left running in the browser.** Rows are written to browser storage (IndexedDB) as they
+  finish, and again when the tab is hidden or closed. The selection being run is saved too, so after **Stop**, a
+  closed tab or a crash the Batch screen reopens on the same selection with a line saying how many are left, and
+  **Resume** carries on from there; closing the tab mid-run asks first. If the terrain service stops answering (six
+  structures in a row fail to reach it), the batch **pauses** instead of failing everything left, and tries again by
+  itself after 1, 2, 5, 10, 15 and 30 minutes or as soon as the connection is back; the structures that failed that
+  way are retried, never kept as results. *Stop retrying* ends the waits. The screen is kept awake while a batch runs
+  where the browser allows it. Only the 300 most recent finished records are kept in memory for **Open in desk**; any
+  other finished row is rebuilt from the inventories and the terrain when opened (a few seconds), including after a
+  reload. Above 300 structures the screen still shows the command line, which runs without a browser and can read a
+  local DEM.
 - **Command line:** `npm run batch:dams -- --out batch-out --state` runs the same thing in Node, appends each row to
   `batch-out/batch.jsonl` (one fsynced line per structure; start it again to resume, and a last line cut short by a
   kill is dropped with a warning and that structure runs again, while a corrupt line anywhere else stops the run and
@@ -329,7 +400,7 @@ The Report step can hand the open dam to the QGIS plugins already installed on t
 | `npm run test:desktop` | Headless smoke test of the desktop app (Python, no GUI). |
 | `npm run validate:crest -- --runner <dam folder or zip> --crest <flood.geojson> [--receptors <points.csv>]` | Scores a Crest flood layer (strip or terrain outline export) against a Breach Runner / LISFLOOD-FP run: recall, precision, CSI, area ratio, depth bias, and depth / velocity / arrival at receptors (`src/lib/crest/validation.ts`). Run by hand. |
 | `npm run data:nd-dams` | Rebuilds `src/lib/crest/data/nd_dams.json` from the NID (ND dam picker). Run only when asked. |
-| `npm run check:engine-sync [-- --other <damit checkout>]` | Checks that `engine.ts`, `spread.ts`, `outline.ts`, `routing.ts` and `warnings.ts` match DamIT's `damit_crest` copy line for line, apart from the pairs listed (with a reason each) in `scripts/engine-sync-allow.json`. Without `--other` it reads damit `main` from GitHub. CI runs it on every change and daily (`.github/workflows/engine-sync.yml`). |
+| `npm run check:engine-sync [-- --other <damit checkout>]` | Checks that `engine.ts`, `spread.ts`, `outline.ts`, `routing.ts` and `warnings.ts` match DamIT's `damit_crest` copy line for line, apart from the pairs listed (with a reason each) in `scripts/engine-sync-allow.json`. Without `--other` it reads damit `main` from GitHub. CI runs it on every change and daily (`.github/workflows/engine-sync.yml`); a PR is compared with damit's branch of the same name when there is one, so an engine change lands as a pair of PRs that are green together. |
 | `npm run batch:dams -- --out <dir> (--state \| --county Cass \| --watershed 09020205 \| --ids ND00199,DWR-4031) [--dem <1 m mosaic .vrt>]` | Batch screen from the command line (see **Batch screen** above); resumes from `<dir>/batch.jsonl`. |
 | `npm run data:nd-structures -- --from data-raw/dwr_structures_<stamp>` | Rebuilds `src/lib/crest/data/nd_structures.json` (every DWR dam and dugout, with HUC8 watersheds) for the batch screen. Run only when asked. |
 | `npm run data:nd-dams-dwr -- --from data-raw/crest_dwr_navd88_<stamp>` | Rebuilds `src/lib/crest/data/nd_dams_dwr.json` from a folder of DWR Dams and Dugouts CSVs already converted to NAVD 88. Run only when asked. |
