@@ -34,9 +34,10 @@ PREFERRED_PORT = 47231
 
 TITLE = "Crest — Dam Breach Desk"
 
-#: Random per-launch secret. The served index.html carries it in <meta name="crest-token">; every /api/ call must
-#: send it back in the X-Crest-Token header. A custom header also forces a CORS preflight, which this server never
-#: answers, so other web origins cannot reach the API from a browser.
+#: Random per-launch secret. The page fetches it once from GET /api/token (guarded by the Host/Origin checks) and
+#: sends it back in the X-Crest-Token header on every /api/ call. The token is never written into the page markup,
+#: so a saved copy of the HTML (e.g. the browser's "Save Page As") cannot carry a live credential. The custom header
+#: also forces a CORS preflight, which this server never answers, so other web origins cannot reach the API.
 TOKEN_HEADER = "X-Crest-Token"
 API_TOKEN = secrets.token_urlsafe(32)
 _LOCAL_HOSTS = ("127.0.0.1", "localhost")
@@ -236,11 +237,19 @@ class _Handler(SimpleHTTPRequestHandler):
         return True
 
     def _serve_index(self) -> None:
+        # The token is NOT injected into the page. The desk fetches it from /api/token instead, so a saved copy of
+        # the HTML (e.g. the browser's "Save Page As") can never carry a live credential.
         index = Path(self.directory) / "index.html"
         html = index.read_text(encoding="utf-8")
-        meta = f'<meta name="crest-token" content="{API_TOKEN}">'
-        html = html.replace("<head>", "<head>" + meta, 1) if "<head>" in html else meta + html
         self._send(200, html.encode("utf-8"), "text/html; charset=utf-8")
+
+    def _send_token(self) -> None:
+        """Hand the page its per-launch API token. Guarded by the Host and Origin checks (not the token itself,
+        which the page does not have yet); the response is the only place the token appears, never page markup."""
+        if not (self._host_ok() and self._origin_ok()):
+            self._send(403, b'{"error":"forbidden"}', "application/json")
+            return
+        self._send(200, json.dumps({"token": API_TOKEN}).encode(), "application/json")
 
     def do_GET(self):
         if not self._host_ok():
@@ -249,6 +258,9 @@ class _Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
             self._serve_index()
+            return
+        if parsed.path == "/api/token":
+            self._send_token()
             return
         if parsed.path.startswith("/api/") and not self._api_allowed():
             return
