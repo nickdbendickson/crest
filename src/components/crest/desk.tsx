@@ -59,6 +59,7 @@ import { saveText } from "@/lib/crest/save";
 import { demTieOffer, missingForNext, needsDemTie } from "@/lib/crest/nd-dams";
 import { onOutlineSaveChange, outlineSaveError } from "@/lib/crest/outline-store";
 import { activeDam, hydrateDesk, useDesk, useSaveStatus } from "@/lib/crest/store";
+import { DeskFiles } from "./DeskFiles";
 import type {
   BreachMethod,
   DamGeometry,
@@ -85,6 +86,11 @@ import { ensureDemSource } from "@/lib/crest/dem-source";
 import type { PointRole } from "./MapDraw";
 import { autoBreachPoint } from "@/lib/crest/breach-point";
 import { CREST_SNAP_M, deriveFromDem, nearRequest } from "@/lib/crest/batch";
+import { assumptions } from "@/lib/crest/settings";
+import { loadSettings, sharedNow } from "@/lib/crest/settings-store";
+import { CREST_VERSION } from "@/lib/crest/version";
+import { BreachAdvanced } from "./BreachAdvanced";
+import { SettingsPanel } from "./SettingsPanel";
 
 // Leaflet touches `window` when it loads, so the map is a client-only chunk.
 const MapDraw = lazy(() => import("./MapDraw").then((m) => ({ default: m.MapDraw })));
@@ -151,6 +157,7 @@ export function Desk() {
   const addDam = useDesk((s) => s.addDam);
   const [ready, setReady] = useState(false);
   const [view, setView] = useState<"desk" | "batch">("desk");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // What "Open in desk" did (selected an existing record or added one), shown once over the desk.
   const [openNote, setOpenNote] = useState<string | null>(null);
   const saveBlocked = useSaveStatus((s) => s.blocked);
@@ -161,9 +168,11 @@ export function Desk() {
     setReady(true);
     // The desktop's saved local DEM (if any) becomes the terrain for every read on the desk.
     void ensureDemSource();
+    // The shared defaults a new record starts from: your defaults file (desktop) or this browser's copy (web).
+    void loadSettings();
   }, []);
 
-  const dam = activeDam({ dams, activeId, step, setStep, select, update, add, addDam, restore });
+  const dam = activeDam({ dams, activeId });
   const result = useMemo(() => analyze(dam), [dam]);
   useResultsSync(dam, result);
 
@@ -177,7 +186,8 @@ export function Desk() {
       ) : saveBlocked ? (
         <div className="border-b border-line bg-card px-4 py-2 text-sm text-amber" role="alert" data-testid="save-blocked">
           This desk is over your browser&rsquo;s storage limit, so your latest edits are no longer being saved.
-          Export your work and reload, or remove a dam&rsquo;s terrain layer to free space.
+          Use &ldquo;Save desk to file&rdquo; (under the dam list) to keep your work, then reload, or remove a
+          dam&rsquo;s terrain layer to free space.
         </div>
       ) : null}
       <header className="border-b border-line bg-card">
@@ -207,9 +217,19 @@ export function Desk() {
                 {v === "desk" ? "One dam" : "Batch"}
               </button>
             ))}
+            <button
+              type="button"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen((o) => !o)}
+              data-testid="settings-toggle"
+              className={"h-11 rounded-sm border px-4 text-sm " + (settingsOpen ? "border-water bg-water text-card" : "border-line bg-card text-ink")}
+            >
+              Settings
+            </button>
           </div>
         </div>
       </header>
+      {settingsOpen ? <SettingsPanel onClose={() => setSettingsOpen(false)} /> : null}
 
       {view === "batch" ? (
         <main className="mx-auto w-full max-w-6xl min-w-0 px-4 py-4">
@@ -257,6 +277,7 @@ export function Desk() {
             })}
           </ul>
           <div className="hidden px-4 pb-4 lg:block">
+            <DeskFiles onNote={setOpenNote} />
             <button
               type="button"
               onClick={restore}
@@ -322,10 +343,13 @@ export function Desk() {
 
           <StepNav step={step} setStep={setStep} blocked={step === "record" ? missingForNext(dam) : []} />
 
+          <div className="mt-6 lg:hidden">
+            <DeskFiles onNote={setOpenNote} />
+          </div>
           <button
             type="button"
             onClick={restore}
-            className="mt-6 inline-flex h-11 items-center gap-2 text-sm text-muted lg:hidden"
+            className="inline-flex h-11 items-center gap-2 text-sm text-muted lg:hidden"
           >
             <RotateCcw className="size-4" aria-hidden="true" />
             Restore samples
@@ -588,6 +612,7 @@ function BreachStep({ dam, result }: { dam: DamRecord; result: ReturnType<typeof
           <Stat k="Released volume" v={`${num(result.breach.volumeAcFt, 0)} ac-ft`} />
         </div>
       </div>
+      <BreachAdvanced dam={dam} result={result} />
       <div className="rounded-md border border-line bg-card p-4">
         <h3 className="text-lg">Outflow</h3>
         <HydroChart series={result.breach.series} />
@@ -1505,7 +1530,8 @@ function PluginPanel({ dam, result }: { dam: DamRecord; result: ReturnType<typeo
           headers: crestApiHeaders(true),
           body: JSON.stringify({
             dam,
-            analysis: result,
+            // With what this record used of the shared defaults, for the dam.json the hand-off writes.
+            analysis: { ...result, assumptions: assumptions(dam, sharedNow(), CREST_VERSION, result.breach.startPool) },
             work: handoff.work,
             dem: handoff.dem,
             model: handoff.model,
@@ -1796,7 +1822,7 @@ function ExportPanel({ dam, result, desk }: { dam: DamRecord; result: ReturnType
         <button type="button" className={btn} onClick={() => void save(`${root}_hydrograph.csv`, exportHydrographCsv(result.breach.series), "text/csv")}>
           Hydrograph CSV
         </button>
-        <button type="button" className={btn} onClick={() => void save(`${root}_dam.json`, exportDamJson(dam, result), "application/json")}>
+        <button type="button" className={btn} onClick={() => void save(`${root}_dam.json`, exportDamJson(dam, result, sharedNow()), "application/json")}>
           dam.json
         </button>
         {(["par", "bci", "bdy"] as const).map((ext) => (

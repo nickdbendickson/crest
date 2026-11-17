@@ -1,5 +1,93 @@
 # Changelog
 
+## 2026-11-13
+
+- **Starting pool and roughness can be changed; Settings reads the suite's shared defaults.** The breach still
+  starts at the top of dam with a piping failure, but the Breach step now has an Advanced section: start the breach
+  at the normal pool or at an entered elevation (the head and the storage in the breach equations follow the pool; a
+  pool that cannot be used falls back to the top of dam with a W-V1 flag), and set Manning's n for the channel and
+  the floodplain of the routed flood (it was fixed at 0.035 / 0.06 with no way to pass another). A header Settings
+  panel holds the shared defaults file the QGIS plugins read (`dam-defaults` format: starting pool, failure mode,
+  breach equation, Manning's n): the desktop app reads and writes `~/DamSafety/defaults.json`, the web desk keeps the
+  values in the browser and opens / saves the file, and `batch:dams` takes `--defaults`. New records, picker records
+  and batch rows start from them; existing records keep their values and say where they differ. `dam.json` (Report
+  step and the desktop dam folder) gains `assumptions` (used / differs / shared values, as a Runner run writes),
+  `starting_pool_ft`, `starting_pool_rule` and the two n values. Default records are unchanged to the last digit and
+  their saved terrain layers stay valid: the layer fingerprint only moves when a record leaves the defaults, so
+  `ENGINE_VERSION` is not bumped. The desk file reads the three new record fields. The engine-sync workflow now
+  compares a PR with damit's branch of the same name when it exists.
+- **Engine sync check across crest and DamIT.** The old `check-engine-parity.mjs` hashed `engine.ts` and
+  `warnings.ts` against a pin kept in the same repo, so it never compared crest with `damit_crest` (the two repos'
+  pins already differed), was not run by CI, and did not cover `spread.ts`, `outline.ts` or `routing.ts`.
+  `scripts/check-engine-sync.mjs` reads both copies and compares them line for line; the only allowed differences are
+  the four line pairs in `scripts/engine-sync-allow.json` (the VERTCON grid import, the disclaimer wording, two comment
+  lines), each with its reason. An allow entry whose line has gone fails the check, so the list cannot rot. The
+  `Engine sync` workflow runs it on every push / PR and daily (so a damit-side change shows up), checking damit out
+  sparsely. The same script and allow list go into damit. Tests: `scripts/check-engine-sync.test.mjs`.
+- **Content-Security-Policy and Subresource Integrity.** Crest had neither (the open item from the security passes;
+  an earlier test even asserted there was no policy, so the PLSS lookup could not be blocked by one).
+  `src/lib/crest/csp.ts` now builds one policy for all three shells: scripts from the app only, `object-src 'none'`,
+  no framing, and `connect-src` / `img-src` limited to the services the desk names (USGS tiles, OpenStreetMap, 3DEP,
+  ND 911, BLM PLSS, and a `VITE_CREST_TILE_URL` server when set). The web app sends it as a header with a per-request
+  nonce (`src/server.ts`; the router puts the nonce on the framework's inline hydration script), the desktop server
+  sends it from `web/security-headers.json` on every response, and `Crest.html` carries it in a `<meta>` tag with the
+  SHA-256 of its one inline script. No `unsafe-inline` / `unsafe-eval` for scripts. The desktop `index.html` carries
+  `sha384` integrity hashes for its script, preloads and stylesheet; `.gitattributes` keeps line endings in
+  `Crest.html` and the bundle from being converted (that would break the hashes). `CREST_NO_CSP=1` drops the desktop
+  policy if a webview needs it. `vercel.json` adds `nosniff` / `X-Frame-Options` / `Referrer-Policy` to static files.
+- **The two Google Fonts are gone.** The web shell linked IBM Plex Sans and Source Serif 4, and no style rule used
+  either. The link is removed, so the web app loads nothing from a third-party origin.
+- **Browser click-through test.** `npm run test:e2e` (`e2e/`, Playwright + Chromium) opens `Crest.html` from disk, the
+  desktop bundle behind its Python server and the built web app, and walks the eight steps on the first sample dam:
+  record, breach, build the terrain layer (worker), 911 lookup, results, dashboard, screen, report, download
+  `dam.json`. Every public service is stubbed from the committed fixtures, so it needs no network. It fails on an
+  uncaught error, a console error, a request to a host it does not know, or anything the policy blocks, and checks an
+  injected inline script is refused. CI runs it (new `e2e` job), and the desktop Python tests now also run on
+  Windows and macOS runners.
+- **Desk backup and restore.** The records lived only in browser storage: a cleared browser, another computer or a
+  full quota lost them, and a `dam.json` could not be read back. Under the dam list, **Save desk to file** writes every
+  dam whole (inputs, receptors, geometry, saved lookups, terrain layer) to `crest-desk-<date>.json`, and **Open desk
+  file or dam.json** reads it back: *Add to this desk* never overwrites (an identical dam is left alone, a changed one
+  is added as "(from file)"), *Replace this desk* swaps the desk for the file. The Report step's `dam.json` now also
+  carries the whole record under `crest_record` (the Runner and Screening ignore unknown keys), so it reopens exactly;
+  an older or desktop-folder `dam.json` reopens from its inputs with a note about what it did not hold. A file is
+  rebuilt field by field through a reader typed on every `DamRecord` key, so a new field cannot be left out of a
+  backup. The over-quota banner now points at Save desk to file. `src/lib/crest/desk-file.ts`,
+  `src/components/crest/DeskFiles.tsx`; tests `desk-file.test.ts`.
+- **"Restore samples" and the batch table's extra columns show again on a wide screen.** A stray `.hidden { display:
+  none }` in `styles.css` sat outside Tailwind's layers, so it beat `lg:block`, `sm:table-cell` and `md:table-cell`:
+  the sidebar's Restore samples button and two batch-table columns were hidden at every width. The rule is removed
+  (Tailwind's own `hidden` does the job).
+- **The browser batch runs again, and a large one can be left running.** Two things:
+  - *Fix.* Every browser batch died on its first finished row with "Illegal invocation": `BatchRowBuffer` kept
+    `setTimeout` / `clearTimeout` as properties of an object and called them as its methods, which a browser refuses
+    (Node does not, so the tests passed). Each lane produced one row and the run stopped with no message. The timers
+    are now called bare; `batch-store.test.ts` stands in for the browser's check.
+  - *Resumable at any size* (`src/lib/crest/batch-job.ts`). Above 300 structures the screen used to send you to the
+    command line. Now the selection being run is saved, so after Stop, a closed tab or a crash the screen reopens on
+    it with "N finished, M to go" and one Resume; rows are also written when the tab is hidden or closed, and closing
+    mid-run asks first. Six terrain / network failures in a row pause the batch instead of failing everything left;
+    it retries by itself after 1, 2, 5, 10, 15, 30 min or when the connection returns (*Stop retrying* ends that),
+    and those failed structures are retried, never kept. The screen is kept awake while it runs. Only the 300 most
+    recent records are held in memory; any other finished row's record is rebuilt on **Open in desk**, which also
+    makes Open in desk work after a reload. Tests: `batch-job.test.ts`.
+- **Batch click-through test.** `npm run test:e2e` now also walks the batch screen on `Crest.html`, the desktop bundle
+  and the web app (`e2e/batch-walk.mjs`): pick nine structures, Run, Stop after two, reload the page, Resume with the
+  terrain service gone (the batch pauses after six structures in a row cannot reach it and says when it tries again),
+  the connection coming back with the service still down (it tries at once, then waits 2 min), Stop retrying, Resume
+  to the end, Download CSV, Open in desk for a row from before the reload, and Clear results. It checks that the two
+  finished rows survive the reload, that no finished structure is run again, that the CSV has one done line per
+  structure, and that the page reports no error other than the dropped connection the test caused. The network stub
+  (`e2e/fake-network.mjs`) can now hold or drop terrain requests and hand any structure the ND00199 fixture terrain.
+  Test-only: no change to the app or the bundles.
+- **Finer terrain cells tested, not adopted.** Two tests of whether 3DEP's 1 m lidar would help the desk, written up
+  in `docs/accuracy-envelope.md` ("Finer terrain cells"). The flood layer built at 5 m scores worse than at 10 m
+  against the Runner baselines on all three dams tried (CSI at 1 ft 0.765 to 0.554 on DWR-3034, 0.350 to 0.258 on
+  DWR-2865; DWR-4031's drainage trace stops after 0.3 km and the layer misses the reference). The crest read at 1 m
+  is 0.9 ft higher at the median than at 10 m (65 dams) and no closer to DWR's top of dam. The desk's terrain is
+  unchanged. For repeating the tests: `score-routed.mjs --cell <m> [--max-px N]` (`reach.ts` takes a `cellM`
+  option; nothing in the desk passes it) and `scripts/crest-read-cells.mjs`.
+
 ## 2026-11-08
 
 - **README starts with how to run Crest.** The first user instruction sat at line 192, after the scripts table and
