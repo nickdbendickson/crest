@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-18
+
+- **The desk prints its address when it starts.** `python run.py` (and the dam-suite launcher `open-nd-crest.sh`) now
+  prints `Crest desktop: http://127.0.0.1:47231/index.html` (or the random port it took when 47231 was busy) as soon as
+  the server is up, flushed so it shows even when the output is a pipe. Before, the address only appeared when there was
+  no webview, and could stay in the output buffer. Found in the 2026-11-18 install test.
+
 ## 2026-11-17
 
 - **Desktop CSP: no more Uncaught EvalError at startup.** pywebview binds `window.pywebview.api` with `new Function` and wraps return values in `eval(...)`, which the desktop Content-Security-Policy (`script-src 'self'`, no `unsafe-eval`) refused. The desk now rewrites that binder to a closure and runs evaluate_js without eval (`crest/webview_csp.py`) so the policy is not weakened. Crest.html and the web app are unchanged. Tests: `tests/test_webview_csp.py`.
