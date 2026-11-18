@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlparse
 
 from crest import WEB_DIR_NAME
 from crest import defaults, localdem
-from crest.qgis_run import WorkFolderError, resolve_work, run_folder, run_layers, run_model, run_screening
+from crest.qgis_run import WorkFolderError, resolve_work, run_check, run_folder, run_layers, run_model, run_screening
 
 #: Fixed local port, so the desk's saved records (browser localStorage is per origin) survive a restart.
 #: If it is taken, a random port is used for that session.
@@ -131,7 +131,9 @@ def start_job(
     def work_job():
         try:
             log = lambda line: _job_log(job, line)
-            if kind == "layers":
+            if kind == "check":
+                result = run_check(log, cancel=cancel)
+            elif kind == "layers":
                 result = run_layers(dam or {}, work, source, log)
             elif kind == "folder":
                 result = run_folder(dam or {}, analysis or {}, work, log, files)
@@ -146,6 +148,8 @@ def start_job(
                     job["chainIds"] = list(result["chainIds"])
                 if result.get("chainResult"):
                     job["chainResult"] = list(result["chainResult"])
+                if result.get("check"):
+                    job["check"] = list(result["check"])
                 job["folder"] = result.get("folder") or ""
                 job["work"] = result.get("work") or ""
         except Exception as exc:
@@ -313,7 +317,8 @@ class _Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        kinds = {"/api/screen": "screen", "/api/model": "model", "/api/folder": "folder", "/api/layers": "layers"}
+        kinds = {"/api/screen": "screen", "/api/model": "model", "/api/folder": "folder", "/api/layers": "layers",
+                 "/api/check": "check"}
         kind = kinds.get(parsed.path)
         if not self._api_allowed():
             return
