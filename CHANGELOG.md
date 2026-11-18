@@ -2,6 +2,13 @@
 
 ## 2026-11-18
 
+- **Security: the desktop API token is no longer handed out over HTTP.** `GET /api/token` (added 2026-11-17) answered
+  any loopback client that sent no `Origin` header, so another process or another OS account on a shared machine
+  could still fetch the token and drive the local API as the Crest user (security audit 2026-11-18, F1). The endpoint
+  is gone. The desk window now opens at `index.html#crest-token=<token>`: a URL fragment is never sent to the server,
+  the page moves it into `sessionStorage` and strips it from the address. The printed address has no token, so opening
+  it in another browser shows the desk with its `/api/` buttons refused. Tests: `tests/test_local_api.py`,
+  `src/lib/crest/crest-token.test.ts`.
 - **Accuracy (from the Edenville test; #116, paired with damit #120). The routed flood's numbers change.** Six changes,
   Crest still a screening tool: (1) *Larger starting terrain*: `OUTLINE_MAX_PX` is a cell budget (3000² cells), not a
   side cap; the first corridor is shortened rather than coarsened (it keeps 10 m cells), 3DEP is read in 2000 px tiles
